@@ -943,53 +943,24 @@ bool isBearish = (
 
 // ============================================================================
 // DELPHI SESSION
-// Entries execute at candle close.
-// Entry close must be >= 09:30 and < 15:00 New York time.
+// Set the entry window and flat time in New York time. These inputs apply to
+// bar closing timestamps. The first bar ending at/after cutoff closes positions.
 // ============================================================================
 
-string delphiTimezone = (
-    "America/New_York"
-)
+string delphiTimezone = "America/New_York"
+int delphiStartHour = input.int(9, "Start hour", minval=0, maxval=23, group="Trading Session", inline="start")
+int delphiStartMinute = input.int(30, "Minute", minval=0, maxval=59, group="Trading Session", inline="start")
+int delphiEndHour = input.int(15, "Cutoff hour", minval=0, maxval=23, group="Trading Session", inline="end")
+int delphiEndMinute = input.int(0, "Minute", minval=0, maxval=59, group="Trading Session", inline="end")
 
-int delphiCloseHour = (
-    hour(
-        time_close,
-        delphiTimezone
-    )
-)
+int delphiStartOfDay = delphiStartHour * 60 + delphiStartMinute
+int delphiEndOfDay = delphiEndHour * 60 + delphiEndMinute
+bool delphiSessionValid = delphiStartOfDay < delphiEndOfDay
+int delphiBarCloseMinute = hour(time_close, delphiTimezone) * 60 + minute(time_close, delphiTimezone)
+bool delphiInTradingSession = timeframe.isintraday and delphiSessionValid and not na(time_close) and delphiBarCloseMinute >= delphiStartOfDay and delphiBarCloseMinute < delphiEndOfDay
 
-int delphiCloseMinute = (
-    minute(
-        time_close,
-        delphiTimezone
-    )
-)
-
-
-bool delphiAfterOpen = (
-    delphiCloseHour > 9 or
-    (
-        delphiCloseHour == 9 and
-        delphiCloseMinute >= 30
-    )
-)
-
-
-bool delphiBeforeCutoff = (
-    delphiCloseHour < 15
-)
-
-
-bool delphiInTradingSession = (
-    delphiAfterOpen and
-    delphiBeforeCutoff
-)
-
-
-bool delphiCutoffClose = (
-    delphiCloseHour == 15 and
-    delphiCloseMinute == 0
-)
+int delphiCutoffTimestamp = timestamp(delphiTimezone, year(time_close, delphiTimezone), month(time_close, delphiTimezone), dayofmonth(time_close, delphiTimezone), delphiEndHour, delphiEndMinute)
+bool delphiCutoffClose = timeframe.isintraday and delphiSessionValid and not na(time_close) and time_close >= delphiCutoffTimestamp and (na(time_close[1]) or time_close[1] < delphiCutoffTimestamp)
 
 
 // ============================================================================
@@ -1126,8 +1097,8 @@ bool endShortTrade = (
 // DELPHI STRATEGY EXECUTION
 // ============================================================================
 
-// Entries use the confirmed signal bar's close and are blocked outside
-// 09:30–15:00 New York time. An opposite entry reverses the position.
+// Entries use the confirmed signal bar's close and the Trading Session inputs.
+// An opposite entry reverses the position.
 bool canEnterLong = startLongTrade and delphiInTradingSession and strategy.position_size <= 0
 bool canEnterShort = startShortTrade and delphiInTradingSession and strategy.position_size >= 0
 
@@ -1164,12 +1135,12 @@ if endShortTrade and strategy.position_size < 0 and not canEnterLong
     )
 
 
-// Force every remaining trade closed at exactly the 15:00 boundary.
+// Close every remaining trade on the first bar ending at/after the cutoff.
 if delphiCutoffClose and strategy.position_size != 0
     strategy.close_all(
-        comment="DELPHI JXS_918 3PM CUTOFF",
+        comment="DELPHI JXS_918 SESSION CUTOFF",
         immediately=true,
-        alert_message="DELPHI JXS_918 3PM Cutoff | {{ticker}} @ {{strategy.order.price}}"
+        alert_message="DELPHI JXS_918 Session Cutoff | {{ticker}} @ {{strategy.order.price}}"
     )
 
 
