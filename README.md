@@ -8,7 +8,11 @@
 
 ## What Lorentzian Classification trading means
 
-Lorentzian Classification (LC) looks for past market bars whose **indicator readings resemble the current bar**. It describes each bar with values such as RSI, WaveTrend, CCI, and ADX, then compares the current set of values with historical sets. Its Lorentzian distance formula uses a logarithm to reduce the influence of unusually large feature differences. The labels from selected historical bars are added together: a positive total favors a long classification and a negative total favors a short classification. It is a pattern classification signal, not a prediction of the next option premium or a guarantee that price will move in that direction.
+Jdehorty's [original TradingView indicator](https://www.tradingview.com/script/WhBzgfDu-Machine-Learning-Lorentzian-Classification/) compares the current bar's indicator readings with patterns from historical bars. The readings can include RSI, WaveTrend, CCI, and ADX. Each selected historical pattern contributes a directional label, and the sum produces a positive or negative vote. This is history-based pattern classification, not a trained neural network or a prediction of option premium.
+
+The script's *Lorentzian distance* adds `log(1 + absolute difference)` across the chosen features. This makes very large feature differences count less than they would in a simple straight-line (Euclidean) comparison. The original author's “price-time” discussion uses unusually disruptive market events as an analogy for outliers; the code does **not** read an FOMC calendar or recognize news. Its approximate neighbor selection is also not a textbook search for the mathematically closest bars.
+
+A positive vote favors the long classification and a negative vote favors the short classification after the enabled market filters. The chart's prediction number and color convey vote direction and intensity, **not a calibrated win probability**. The kernel regression line is a separate trend estimate that DELPHI uses to check the LC signal. Similar past indicator patterns can still lead to different future prices.
 
 **DELPHI trades a change in that LC classification.** It does not enter merely because a bar is colored bullish or bearish, and it does not wait for several consecutive confirmation bars. A new buy or sell signal must pass the enabled market filters, agree with the kernel direction, and occur within the entry window:
 
