@@ -6,6 +6,20 @@
 
 **DELPHI** is a TradingView strategy adapted from jdehorty's *Machine Learning: Lorentzian Classification*. The title says “Indicator” to retain the JXS name, but the script uses `strategy()` and reports orders in Strategy Tester. It trades changes in a filtered Lorentzian classification signal when the kernel trend agrees.
 
+## What Lorentzian Classification trading means
+
+Lorentzian Classification (LC) looks for past market bars whose **indicator readings resemble the current bar**. It describes each bar with values such as RSI, WaveTrend, CCI, and ADX, then compares the current set of values with historical sets. Its Lorentzian distance formula uses a logarithm to reduce the influence of unusually large feature differences. The labels from selected historical bars are added together: a positive total favors a long classification and a negative total favors a short classification. It is a pattern classification signal, not a prediction of the next option premium or a guarantee that price will move in that direction.
+
+**DELPHI trades a change in that LC classification.** It does not enter merely because a bar is colored bullish or bearish, and it does not wait for several consecutive confirmation bars. A new buy or sell signal must pass the enabled market filters, agree with the kernel direction, and occur within the entry window:
+
+| LC event | Additional checks | DELPHI action |
+| --- | --- | --- |
+| Classification changes to long | Bullish kernel, optional EMA/SMA uptrend, closing time from 09:30 to before 15:00 New York | Enter long at that bar's close |
+| Classification changes to short | Bearish kernel, optional EMA/SMA downtrend, same session rule | Enter short at that bar's close |
+| Classification stays the same or a check fails | No new eligible signal | Do not open a new trade |
+
+For example, if the neighbor labels produce a positive vote and the filtered classification flips to long at 10:15, DELPHI buys at that candle's close only if the kernel and any enabled trend filters also agree. Subsequent positive bars alone do not create another entry. The exit and 15:00 cutoff rules below then manage the position. In ARES, LC can be used alongside extra color-bar and price-slope confirmations; those optional ARES confirmations are not part of DELPHI.
+
 ## How the signal is made
 
 1. **Feature values:** Each bar calculates up to five normalized indicators chosen from RSI, WaveTrend, CCI, and ADX. The defaults are RSI (14, 1), WT (10, 11), CCI (20, 1), ADX (20), and RSI (9, 1). Choose two to five features.
