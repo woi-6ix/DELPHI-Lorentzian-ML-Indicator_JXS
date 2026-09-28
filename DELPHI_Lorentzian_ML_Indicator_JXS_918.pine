@@ -1,0 +1,1630 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// See https://mozilla.org/MPL/2.0/
+// Original Lorentzian Classification: © jdehorty. DELPHI adaptation: JXS_918.
+
+//@version=6
+//@strategy_alert_message {{strategy.order.alert_message}}
+strategy(title="DELPHI Lorentzian ML Indicator_{JXS_918}", shorttitle="DELPHI_JXS_918", overlay=true, precision=4, max_labels_count=500, pyramiding=0, process_orders_on_close=true)
+
+import jdehorty/MLExtensions/2 as ml
+import jdehorty/KernelFunctions/2 as kernels
+
+type Settings
+    float source
+    int neighborsCount
+    int maxBarsBack
+    int featureCount
+    int colorCompression
+    bool showExits
+    bool useDynamicExits
+
+type Label
+    int long
+    int short
+    int neutral
+
+type FeatureArrays
+    array<float> f1
+    array<float> f2
+    array<float> f3
+    array<float> f4
+    array<float> f5
+
+type FeatureSeries
+    float f1
+    float f2
+    float f3
+    float f4
+    float f5
+
+type MLModel
+    int firstBarIndex
+    array<int> trainingLabels
+    int loopSize
+    float lastDistance
+    array<float> distancesArray
+    array<int> predictionsArray
+    int prediction
+
+type FilterSettings
+    bool useVolatilityFilter
+    bool useRegimeFilter
+    bool useAdxFilter
+    float regimeThreshold
+    int adxThreshold
+
+type Filter
+    bool volatility
+    bool regime
+    bool adx
+
+
+series_from(feature_string, _close, _high, _low, _hlc3, f_paramA, f_paramB) =>
+    switch feature_string
+        "RSI" => ml.n_rsi(_close, f_paramA, f_paramB)
+        "WT" => ml.n_wt(_hlc3, f_paramA, f_paramB)
+        "CCI" => ml.n_cci(_close, f_paramA, f_paramB)
+        "ADX" => ml.n_adx(_high, _low, _close, f_paramA)
+
+
+get_lorentzian_distance(int i, int featureCount, FeatureSeries featureSeries, FeatureArrays featureArrays) =>
+    switch featureCount
+        5 => (
+            math.log(1 + math.abs(featureSeries.f1 - array.get(featureArrays.f1, i))) +
+            math.log(1 + math.abs(featureSeries.f2 - array.get(featureArrays.f2, i))) +
+            math.log(1 + math.abs(featureSeries.f3 - array.get(featureArrays.f3, i))) +
+            math.log(1 + math.abs(featureSeries.f4 - array.get(featureArrays.f4, i))) +
+            math.log(1 + math.abs(featureSeries.f5 - array.get(featureArrays.f5, i)))
+        )
+
+        4 => (
+            math.log(1 + math.abs(featureSeries.f1 - array.get(featureArrays.f1, i))) +
+            math.log(1 + math.abs(featureSeries.f2 - array.get(featureArrays.f2, i))) +
+            math.log(1 + math.abs(featureSeries.f3 - array.get(featureArrays.f3, i))) +
+            math.log(1 + math.abs(featureSeries.f4 - array.get(featureArrays.f4, i)))
+        )
+
+        3 => (
+            math.log(1 + math.abs(featureSeries.f1 - array.get(featureArrays.f1, i))) +
+            math.log(1 + math.abs(featureSeries.f2 - array.get(featureArrays.f2, i))) +
+            math.log(1 + math.abs(featureSeries.f3 - array.get(featureArrays.f3, i)))
+        )
+
+        2 => (
+            math.log(1 + math.abs(featureSeries.f1 - array.get(featureArrays.f1, i))) +
+            math.log(1 + math.abs(featureSeries.f2 - array.get(featureArrays.f2, i)))
+        )
+
+        => 0.0
+
+
+Settings settings = (
+ Settings.new(
+   input.source(
+       title='Source',
+       defval=close,
+       group="General Settings",
+       tooltip="Source of the input data"
+   ),
+
+   input.int(
+       title='Neighbors Count',
+       defval=8,
+       group="General Settings",
+       minval=1,
+       maxval=100,
+       step=1,
+       tooltip="Number of neighbors to consider"
+   ),
+
+   input.int(
+       title="Max Bars Back",
+       defval=2000,
+       group="General Settings"
+   ),
+
+   input.int(
+       title="Feature Count",
+       defval=5,
+       group="Feature Engineering",
+       minval=2,
+       maxval=5,
+       tooltip="Number of features to use for ML predictions."
+   ),
+
+   input.int(
+       title="Color Compression",
+       defval=1,
+       group="General Settings",
+       minval=1,
+       maxval=10,
+       tooltip="Compression factor for adjusting the intensity of the color scale."
+   ),
+
+   input.bool(
+       title="Show Default Exits",
+       defval=false,
+       group="General Settings",
+       tooltip="Default exits occur exactly 4 bars after an entry signal.",
+       inline="exits"
+   ),
+
+   input.bool(
+       title="Use Dynamic Exits",
+       defval=false,
+       group="General Settings",
+       tooltip="Dynamic exits use kernel regression logic.",
+       inline="exits"
+   )
+ )
+)
+
+showTradeStats = input.bool(
+    true,
+    'Show Trade Stats',
+    group="General Settings"
+)
+
+useWorstCase = input.bool(
+    false,
+    "Use Worst Case Estimates",
+    group="General Settings"
+)
+
+includeFullHistory = input.bool(
+    title="Include Full History",
+    defval=false,
+    group="General Settings"
+)
+
+
+FilterSettings filterSettings = (
+ FilterSettings.new(
+   input.bool(
+       title="Use Volatility Filter",
+       defval=true,
+       group="Filters"
+   ),
+
+   input.bool(
+       title="Use Regime Filter",
+       defval=true,
+       group="Filters",
+       inline="regime"
+   ),
+
+   input.bool(
+       title="Use ADX Filter",
+       defval=false,
+       group="Filters",
+       inline="adx"
+   ),
+
+   input.float(
+       title="Threshold",
+       defval=-0.1,
+       minval=-10,
+       maxval=10,
+       step=0.1,
+       group="Filters",
+       inline="regime"
+   ),
+
+   input.int(
+       title="Threshold",
+       defval=20,
+       minval=0,
+       maxval=100,
+       step=1,
+       group="Filters",
+       inline="adx"
+   )
+ )
+)
+
+Filter filter = (
+ Filter.new(
+   ml.filter_volatility(
+       1,
+       10,
+       filterSettings.useVolatilityFilter
+   ),
+
+   ml.regime_filter(
+       ohlc4,
+       filterSettings.regimeThreshold,
+       filterSettings.useRegimeFilter
+   ),
+
+   ml.filter_adx(
+       settings.source,
+       14,
+       filterSettings.adxThreshold,
+       filterSettings.useAdxFilter
+   )
+ )
+)
+
+f1_string = input.string(
+    title="Feature 1",
+    options=["RSI", "WT", "CCI", "ADX"],
+    defval="RSI",
+    inline="01",
+    group="Feature Engineering"
+)
+
+f1_paramA = input.int(
+    title="Parameter A",
+    defval=14,
+    inline="02",
+    group="Feature Engineering"
+)
+
+f1_paramB = input.int(
+    title="Parameter B",
+    defval=1,
+    inline="02",
+    group="Feature Engineering"
+)
+
+
+f2_string = input.string(
+    title="Feature 2",
+    options=["RSI", "WT", "CCI", "ADX"],
+    defval="WT",
+    inline="03",
+    group="Feature Engineering"
+)
+
+f2_paramA = input.int(
+    title="Parameter A",
+    defval=10,
+    inline="04",
+    group="Feature Engineering"
+)
+
+f2_paramB = input.int(
+    title="Parameter B",
+    defval=11,
+    inline="04",
+    group="Feature Engineering"
+)
+
+
+f3_string = input.string(
+    title="Feature 3",
+    options=["RSI", "WT", "CCI", "ADX"],
+    defval="CCI",
+    inline="05",
+    group="Feature Engineering"
+)
+
+f3_paramA = input.int(
+    title="Parameter A",
+    defval=20,
+    inline="06",
+    group="Feature Engineering"
+)
+
+f3_paramB = input.int(
+    title="Parameter B",
+    defval=1,
+    inline="06",
+    group="Feature Engineering"
+)
+
+
+f4_string = input.string(
+    title="Feature 4",
+    options=["RSI", "WT", "CCI", "ADX"],
+    defval="ADX",
+    inline="07",
+    group="Feature Engineering"
+)
+
+f4_paramA = input.int(
+    title="Parameter A",
+    defval=20,
+    inline="08",
+    group="Feature Engineering"
+)
+
+f4_paramB = input.int(
+    title="Parameter B",
+    defval=2,
+    inline="08",
+    group="Feature Engineering"
+)
+
+
+f5_string = input.string(
+    title="Feature 5",
+    options=["RSI", "WT", "CCI", "ADX"],
+    defval="RSI",
+    inline="09",
+    group="Feature Engineering"
+)
+
+f5_paramA = input.int(
+    title="Parameter A",
+    defval=9,
+    inline="10",
+    group="Feature Engineering"
+)
+
+f5_paramB = input.int(
+    title="Parameter B",
+    defval=1,
+    inline="10",
+    group="Feature Engineering"
+)
+
+
+featureSeries = (
+ FeatureSeries.new(
+   series_from(f1_string, close, high, low, hlc3, f1_paramA, f1_paramB),
+   series_from(f2_string, close, high, low, hlc3, f2_paramA, f2_paramB),
+   series_from(f3_string, close, high, low, hlc3, f3_paramA, f3_paramB),
+   series_from(f4_string, close, high, low, hlc3, f4_paramA, f4_paramB),
+   series_from(f5_string, close, high, low, hlc3, f5_paramA, f5_paramB)
+ )
+)
+
+
+var f1Array = array.new_float()
+var f2Array = array.new_float()
+var f3Array = array.new_float()
+var f4Array = array.new_float()
+var f5Array = array.new_float()
+
+array.push(f1Array, featureSeries.f1)
+array.push(f2Array, featureSeries.f2)
+array.push(f3Array, featureSeries.f3)
+array.push(f4Array, featureSeries.f4)
+array.push(f5Array, featureSeries.f5)
+
+
+featureArrays = (
+ FeatureArrays.new(
+   f1Array,
+   f2Array,
+   f3Array,
+   f4Array,
+   f5Array
+ )
+)
+
+
+Label direction = (
+ Label.new(
+   long=1,
+   short=-1,
+   neutral=0
+ )
+)
+
+
+maxBarsBackIndex = (
+    last_bar_index >= settings.maxBarsBack
+    ? last_bar_index - settings.maxBarsBack
+    : 0
+)
+
+
+useEmaFilter = input.bool(
+    title="Use EMA Filter",
+    defval=false,
+    group="Filters",
+    inline="ema"
+)
+
+emaPeriod = input.int(
+    title="Period",
+    defval=200,
+    minval=1,
+    step=1,
+    group="Filters",
+    inline="ema"
+)
+
+emaValue = ta.ema(close, emaPeriod)
+
+isEmaUptrend = (
+    useEmaFilter
+    ? close > emaValue
+    : true
+)
+
+isEmaDowntrend = (
+    useEmaFilter
+    ? close < emaValue
+    : true
+)
+
+
+useSmaFilter = input.bool(
+    title="Use SMA Filter",
+    defval=false,
+    group="Filters",
+    inline="sma"
+)
+
+smaPeriod = input.int(
+    title="Period",
+    defval=200,
+    minval=1,
+    step=1,
+    group="Filters",
+    inline="sma"
+)
+
+smaValue = ta.sma(close, smaPeriod)
+
+isSmaUptrend = (
+    useSmaFilter
+    ? close > smaValue
+    : true
+)
+
+isSmaDowntrend = (
+    useSmaFilter
+    ? close < smaValue
+    : true
+)
+
+
+useKernelFilter = input.bool(
+    true,
+    "Trade with Kernel",
+    group="Kernel Settings",
+    inline="kernel"
+)
+
+showKernelEstimate = input.bool(
+    true,
+    "Show Kernel Estimate",
+    group="Kernel Settings",
+    inline="kernel"
+)
+
+useKernelSmoothing = input.bool(
+    false,
+    "Enhance Kernel Smoothing",
+    inline="1",
+    group="Kernel Settings"
+)
+
+h = input.int(
+    8,
+    "Lookback Window",
+    minval=3,
+    group="Kernel Settings",
+    inline="kernel"
+)
+
+r = input.float(
+    8.0,
+    "Relative Weighting",
+    step=0.25,
+    group="Kernel Settings",
+    inline="kernel"
+)
+
+x = input.int(
+    25,
+    "Regression Level",
+    group="Kernel Settings",
+    inline="kernel"
+)
+
+lag = input.int(
+    2,
+    "Lag",
+    minval=1,
+    group="Kernel Settings",
+    inline="1"
+)
+
+
+showBarColors = input.bool(
+    true,
+    "Show Bar Colors",
+    group="Display Settings"
+)
+
+showBarPredictions = input.bool(
+    true,
+    "Show Bar Prediction Values",
+    group="Display Settings"
+)
+
+useAtrOffset = input.bool(
+    true,
+    "Use ATR Offset",
+    group="Display Settings"
+)
+
+barPredictionsOffset = input.float(
+    0,
+    "Bar Prediction Offset",
+    minval=0,
+    group="Display Settings"
+)
+
+useConfidenceGradient = input.bool(
+    true,
+    "Use Confidence Gradient",
+    group="Display Settings"
+)
+
+barColorScheme = input.string(
+    "Default",
+    "Bar Color Scheme",
+    options=["Default", "Solid"],
+    group="Display Settings"
+)
+
+
+src = settings.source
+
+y_train_series = (
+    src[4] < src[0]
+    ? direction.short
+    : src[4] > src[0]
+    ? direction.long
+    : direction.neutral
+)
+
+
+var y_train_array = array.new_int(0)
+var predictions = array.new_float(0)
+var prediction = 0.0
+var signal = direction.neutral
+var distances = array.new_float(0)
+
+array.push(y_train_array, y_train_series)
+
+
+lastDistance = -1.0
+
+size = (
+    math.min(
+        settings.maxBarsBack - 1,
+        array.size(y_train_array) - 1
+    )
+)
+
+sizeLoop = (
+    math.min(
+        settings.maxBarsBack - 1,
+        size
+    )
+)
+
+startIndex = (
+    includeFullHistory
+    ? 0
+    : maxBarsBackIndex
+)
+
+
+if bar_index >= maxBarsBackIndex
+    for i = startIndex to sizeLoop
+        d = (
+            get_lorentzian_distance(
+                i,
+                settings.featureCount,
+                featureSeries,
+                featureArrays
+            )
+        )
+
+        if d >= lastDistance and i % 4 != 0
+            lastDistance := d
+
+            array.push(
+                distances,
+                d
+            )
+
+            array.push(
+                predictions,
+                math.round(array.get(y_train_array, i))
+            )
+
+            if array.size(predictions) > settings.neighborsCount
+                lastDistance := (
+                    array.get(
+                        distances,
+                        math.round(settings.neighborsCount * 3 / 4)
+                    )
+                )
+
+                array.shift(distances)
+                array.shift(predictions)
+
+    prediction := array.sum(predictions)
+
+
+filter_all = (
+    filter.volatility and
+    filter.regime and
+    filter.adx
+)
+
+
+signal := (
+    prediction > 0 and filter_all
+    ? direction.long
+    : prediction < 0 and filter_all
+    ? direction.short
+    : nz(signal[1], direction.neutral)
+)
+
+
+var int barsHeld = 0
+
+barsHeld := (
+    ta.change(signal) != 0
+    ? 0
+    : barsHeld + 1
+)
+
+
+bool isHeldFourBars = (
+    barsHeld == 4
+)
+
+bool isHeldLessThanFourBars = (
+    barsHeld > 0 and
+    barsHeld < 4
+)
+
+
+float signalChange = (
+    ta.change(signal)
+)
+
+float signalChange1 = (
+    ta.change(signal[1])
+)
+
+float signalChange2 = (
+    ta.change(signal[2])
+)
+
+float signalChange3 = (
+    ta.change(signal[3])
+)
+
+
+bool isDifferentSignalType = (
+    signalChange != 0
+)
+
+
+bool isEarlySignalFlip = (
+    signalChange != 0 and
+    (
+        signalChange1 != 0 or
+        signalChange2 != 0 or
+        signalChange3 != 0
+    )
+)
+
+
+bool isBuySignal = (
+    signal == direction.long and
+    isEmaUptrend and
+    isSmaUptrend
+)
+
+
+bool isSellSignal = (
+    signal == direction.short and
+    isEmaDowntrend and
+    isSmaDowntrend
+)
+
+
+bool isLastSignalBuy = (
+    signal[4] == direction.long and
+    isEmaUptrend[4] and
+    isSmaUptrend[4]
+)
+
+
+bool isLastSignalSell = (
+    signal[4] == direction.short and
+    isEmaDowntrend[4] and
+    isSmaDowntrend[4]
+)
+
+
+bool isNewBuySignal = (
+    isBuySignal and
+    isDifferentSignalType
+)
+
+
+bool isNewSellSignal = (
+    isSellSignal and
+    isDifferentSignalType
+)
+
+
+color_green(float pred) =>
+    scaledPrediction = (
+        math.min(
+            math.abs(pred),
+            10
+        )
+    )
+
+    if not useConfidenceGradient
+        #009988
+    else
+        switch
+            scaledPrediction >= 9 => #009988
+            scaledPrediction >= 8 => color.new(#009988, 10)
+            scaledPrediction >= 7 => color.new(#009988, 20)
+            scaledPrediction >= 6 => color.new(#009988, 30)
+            scaledPrediction >= 5 => color.new(#009988, 40)
+            scaledPrediction >= 4 => color.new(#009988, 50)
+            scaledPrediction >= 3 => color.new(#009988, 60)
+            scaledPrediction >= 2 => color.new(#009988, 70)
+            scaledPrediction >= 1 => color.new(#009988, 80)
+            => color.new(#009988, 90)
+
+
+color_red(float pred) =>
+    scaledPrediction = (
+        math.min(
+            math.abs(pred),
+            10
+        )
+    )
+
+    if not useConfidenceGradient
+        #CC3311
+    else
+        switch
+            scaledPrediction >= 9 => #CC3311
+            scaledPrediction >= 8 => color.new(#CC3311, 10)
+            scaledPrediction >= 7 => color.new(#CC3311, 20)
+            scaledPrediction >= 6 => color.new(#CC3311, 30)
+            scaledPrediction >= 5 => color.new(#CC3311, 40)
+            scaledPrediction >= 4 => color.new(#CC3311, 50)
+            scaledPrediction >= 3 => color.new(#CC3311, 60)
+            scaledPrediction >= 2 => color.new(#CC3311, 70)
+            scaledPrediction >= 1 => color.new(#CC3311, 80)
+            => color.new(#CC3311, 90)
+
+
+c_green = color.new(#009988, 20)
+c_red = color.new(#CC3311, 20)
+transparent = color.new(#000000, 100)
+
+
+yhat1 = (
+    kernels.rationalQuadratic(
+        settings.source,
+        h,
+        r,
+        x
+    )
+)
+
+yhat2 = (
+    kernels.gaussian(
+        settings.source,
+        h - lag,
+        x
+    )
+)
+
+kernelEstimate = yhat1
+
+
+bool wasBearishRate = (
+    yhat1[2] > yhat1[1]
+)
+
+bool wasBullishRate = (
+    yhat1[2] < yhat1[1]
+)
+
+bool isBearishRate = (
+    yhat1[1] > yhat1
+)
+
+bool isBullishRate = (
+    yhat1[1] < yhat1
+)
+
+bool isBearishChange = (
+    isBearishRate and
+    wasBullishRate
+)
+
+bool isBullishChange = (
+    isBullishRate and
+    wasBearishRate
+)
+
+
+bool isBullishCrossAlert = (
+    ta.crossover(
+        yhat2,
+        yhat1
+    )
+)
+
+bool isBearishCrossAlert = (
+    ta.crossunder(
+        yhat2,
+        yhat1
+    )
+)
+
+bool isBullishSmooth = (
+    yhat2 >= yhat1
+)
+
+bool isBearishSmooth = (
+    yhat2 <= yhat1
+)
+
+
+color colorByCross = (
+    isBullishSmooth
+    ? c_green
+    : c_red
+)
+
+color colorByRate = (
+    isBullishRate
+    ? c_green
+    : c_red
+)
+
+color plotColor = (
+    showKernelEstimate
+    ? (
+        useKernelSmoothing
+        ? colorByCross
+        : colorByRate
+    )
+    : transparent
+)
+
+
+plot(
+    kernelEstimate,
+    color=plotColor,
+    linewidth=2,
+    title="DELPHI Kernel Regression Estimate"
+)
+
+
+bool alertBullish = (
+    useKernelSmoothing
+    ? isBullishCrossAlert
+    : isBullishChange
+)
+
+bool alertBearish = (
+    useKernelSmoothing
+    ? isBearishCrossAlert
+    : isBearishChange
+)
+
+
+bool isBullish = (
+    useKernelFilter
+    ? (
+        useKernelSmoothing
+        ? isBullishSmooth
+        : isBullishRate
+    )
+    : true
+)
+
+bool isBearish = (
+    useKernelFilter
+    ? (
+        useKernelSmoothing
+        ? isBearishSmooth
+        : isBearishRate
+    )
+    : true
+)
+
+
+// ============================================================================
+// DELPHI SESSION
+// Entries execute at candle close.
+// Entry close must be >= 09:30 and < 15:00 New York time.
+// ============================================================================
+
+string delphiTimezone = (
+    "America/New_York"
+)
+
+int delphiCloseHour = (
+    hour(
+        time_close,
+        delphiTimezone
+    )
+)
+
+int delphiCloseMinute = (
+    minute(
+        time_close,
+        delphiTimezone
+    )
+)
+
+
+bool delphiAfterOpen = (
+    delphiCloseHour > 9 or
+    (
+        delphiCloseHour == 9 and
+        delphiCloseMinute >= 30
+    )
+)
+
+
+bool delphiBeforeCutoff = (
+    delphiCloseHour < 15
+)
+
+
+bool delphiInTradingSession = (
+    delphiAfterOpen and
+    delphiBeforeCutoff
+)
+
+
+bool delphiCutoffClose = (
+    delphiCloseHour == 15 and
+    delphiCloseMinute == 0
+)
+
+
+// ============================================================================
+// DELPHI ENTRIES
+// ============================================================================
+
+bool startLongTrade = (
+    delphiInTradingSession and
+    isNewBuySignal and
+    isBullish and
+    isEmaUptrend and
+    isSmaUptrend
+)
+
+
+bool startShortTrade = (
+    delphiInTradingSession and
+    isNewSellSignal and
+    isBearish and
+    isEmaDowntrend and
+    isSmaDowntrend
+)
+
+
+bool lastSignalWasBullish = (
+    ta.barssince(startLongTrade) <
+    ta.barssince(startShortTrade)
+)
+
+bool lastSignalWasBearish = (
+    ta.barssince(startShortTrade) <
+    ta.barssince(startLongTrade)
+)
+
+
+int barsSinceRedEntry = (
+    ta.barssince(startShortTrade)
+)
+
+int barsSinceRedExit = (
+    ta.barssince(alertBullish)
+)
+
+int barsSinceGreenEntry = (
+    ta.barssince(startLongTrade)
+)
+
+int barsSinceGreenExit = (
+    ta.barssince(alertBearish)
+)
+
+
+bool isValidShortExit = (
+    barsSinceRedExit >
+    barsSinceRedEntry
+)
+
+bool isValidLongExit = (
+    barsSinceGreenExit >
+    barsSinceGreenEntry
+)
+
+
+bool endLongTradeDynamic = (
+    isBearishChange and
+    isValidLongExit[1]
+)
+
+
+bool endShortTradeDynamic = (
+    isBullishChange and
+    isValidShortExit[1]
+)
+
+
+bool endLongTradeStrict = (
+    (
+        (
+            isHeldFourBars and
+            isLastSignalBuy
+        )
+        or
+        (
+            isHeldLessThanFourBars and
+            isNewSellSignal and
+            isLastSignalBuy
+        )
+    )
+    and startLongTrade[4]
+)
+
+
+bool endShortTradeStrict = (
+    (
+        (
+            isHeldFourBars and
+            isLastSignalSell
+        )
+        or
+        (
+            isHeldLessThanFourBars and
+            isNewBuySignal and
+            isLastSignalSell
+        )
+    )
+    and startShortTrade[4]
+)
+
+
+bool isDynamicExitValid = (
+    not useEmaFilter and
+    not useSmaFilter and
+    not useKernelSmoothing
+)
+
+
+bool endLongTrade = (
+    settings.useDynamicExits and
+    isDynamicExitValid
+    ? endLongTradeDynamic
+    : endLongTradeStrict
+)
+
+
+bool endShortTrade = (
+    settings.useDynamicExits and
+    isDynamicExitValid
+    ? endShortTradeDynamic
+    : endShortTradeStrict
+)
+
+
+// ============================================================================
+// DELPHI STRATEGY EXECUTION
+// ============================================================================
+
+if startLongTrade
+    strategy.entry(
+        "DELPHI Long",
+        strategy.long,
+        comment="DELPHI JXS_918 LONG",
+        alert_message="DELPHI JXS_918 Open Long | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+else if startShortTrade
+    strategy.entry(
+        "DELPHI Short",
+        strategy.short,
+        comment="DELPHI JXS_918 SHORT",
+        alert_message="DELPHI JXS_918 Open Short | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+else
+    if endLongTrade and strategy.position_size > 0
+        strategy.close(
+            "DELPHI Long",
+            comment="DELPHI JXS_918 LONG EXIT",
+            alert_message="DELPHI JXS_918 Close Long | {{ticker}} @ {{strategy.order.price}}"
+        )
+
+    if endShortTrade and strategy.position_size < 0
+        strategy.close(
+            "DELPHI Short",
+            comment="DELPHI JXS_918 SHORT EXIT",
+            alert_message="DELPHI JXS_918 Close Short | {{ticker}} @ {{strategy.order.price}}"
+        )
+
+
+// Force every remaining trade closed at exactly the 15:00 boundary.
+if delphiCutoffClose and strategy.position_size != 0
+    strategy.close_all(
+        comment="DELPHI JXS_918 3PM CUTOFF",
+        immediately=true,
+        alert_message="DELPHI JXS_918 3PM Cutoff | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+
+// ============================================================================
+// DELPHI CHART SIGNALS
+// ============================================================================
+
+plotshape(
+    startLongTrade
+    ? low
+    : na,
+    title="DELPHI Buy",
+    style=shape.labelup,
+    location=location.belowbar,
+    color=color_green(prediction),
+    size=size.small,
+    offset=0
+)
+
+
+plotshape(
+    startShortTrade
+    ? high
+    : na,
+    title="DELPHI Sell",
+    style=shape.labeldown,
+    location=location.abovebar,
+    color=color_red(-prediction),
+    size=size.small,
+    offset=0
+)
+
+
+plotshape(
+    endLongTrade and settings.showExits
+    ? high
+    : na,
+    title="DELPHI Long Exit",
+    style=shape.xcross,
+    location=location.absolute,
+    color=useConfidenceGradient
+        ? c_green
+        : #009988,
+    size=size.tiny,
+    offset=0
+)
+
+
+plotshape(
+    endShortTrade and settings.showExits
+    ? low
+    : na,
+    title="DELPHI Short Exit",
+    style=shape.xcross,
+    location=location.absolute,
+    color=useConfidenceGradient
+        ? c_red
+        : #CC3311,
+    size=size.tiny,
+    offset=0
+)
+
+
+// ============================================================================
+// DELPHI KERNEL ALERTS
+// Trade entries, exits and the session cutoff use order-fill alert messages.
+// ============================================================================
+if alertBullish
+    alert("DELPHI JXS_918 Kernel Bullish | " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar_close)
+if alertBearish
+    alert("DELPHI JXS_918 Kernel Bearish | " + syminfo.ticker + " @ " + str.tostring(close), alert.freq_once_per_bar_close)
+
+
+// ============================================================================
+// DISPLAY
+// ============================================================================
+
+atrSpaced = (
+    useAtrOffset
+    ? ta.atr(1)
+    : na
+)
+
+
+compressionFactor = (
+    settings.neighborsCount /
+    settings.colorCompression
+)
+
+
+c_neutral = (
+    color.new(
+        #787b86,
+        25
+    )
+)
+
+
+solid_color_index(float pred) =>
+    compression = (
+        math.max(
+            float(settings.neighborsCount) /
+            float(settings.colorCompression),
+            1.0
+        )
+    )
+
+    int(
+        math.min(
+            math.round(
+                math.abs(pred) /
+                compression *
+                9.0
+            ),
+            9.0
+        )
+    )
+
+
+solid_green_bar_color(float pred) =>
+    idx = (
+        solid_color_index(pred)
+    )
+
+    frac = (
+        (idx + 1) /
+        10.0
+    )
+
+    color.rgb(
+        int(255 - frac * 255),
+        int(255 - frac * (255 - 153)),
+        int(255 - frac * (255 - 136))
+    )
+
+
+solid_red_bar_color(float pred) =>
+    idx = (
+        solid_color_index(pred)
+    )
+
+    frac = (
+        (idx + 1) /
+        10.0
+    )
+
+    color.rgb(
+        int(255 - frac * (255 - 204)),
+        int(255 - frac * (255 - 51)),
+        int(255 - frac * (255 - 17))
+    )
+
+
+solid_bar_color(float pred) =>
+    pred > 0
+    ? solid_green_bar_color(pred)
+    : pred < 0
+    ? solid_red_bar_color(pred)
+    : #787B86
+
+
+c_pred = (
+    prediction > 0
+    ? color_green(prediction)
+    : prediction < 0
+    ? color_red(-prediction)
+    : c_neutral
+)
+
+
+c_label = (
+    showBarPredictions
+    ? c_pred
+    : na
+)
+
+
+c_bars = (
+    showBarColors
+    ? (
+        barColorScheme == "Solid"
+        ? solid_bar_color(prediction)
+        : (
+            useConfidenceGradient
+            ? color.new(c_pred, 50)
+            : color.new(c_pred, 30)
+        )
+    )
+    : na
+)
+
+
+x_val = (
+    bar_index
+)
+
+
+y_val = (
+    useAtrOffset
+    ? (
+        prediction > 0
+        ? high + atrSpaced
+        : low - atrSpaced
+    )
+    : (
+        prediction > 0
+        ? high + hl2 * barPredictionsOffset / 20
+        : low - hl2 * barPredictionsOffset / 30
+    )
+)
+
+
+pos_pred = (
+    prediction > 0
+    ? label.style_label_down
+    : label.style_label_up
+)
+
+
+if showBarPredictions
+    label.new(
+        x=x_val,
+        y=y_val,
+        text=str.tostring(prediction),
+        xloc=xloc.bar_index,
+        yloc=yloc.price,
+        color=color.new(color.white, 100),
+        style=pos_pred,
+        textcolor=c_label,
+        size=size.normal,
+        textalign=text.align_left
+    )
+
+
+barcolor(
+    showBarColors
+    ? c_bars
+    : na
+)
+
+
+// ============================================================================
+// DELPHI BACKTEST STREAM
+// ============================================================================
+
+int backTestStream = 0
+
+if startLongTrade
+    backTestStream := 1
+
+else if endLongTrade
+    backTestStream := 2
+
+else if startShortTrade
+    backTestStream := -1
+
+else if endShortTrade
+    backTestStream := -2
+
+
+plot(
+    backTestStream,
+    title="DELPHI Backtest Stream",
+    display=display.none
+)
+
+
+// ============================================================================
+// ORIGINAL ML STATISTICS
+// ============================================================================
+
+[totalWins, totalLosses, totalEarlySignalFlips, totalTrades, tradeStatsHeader, winLossRatio, winRate] = ml.backtest(
+    high,
+    low,
+    open,
+    startLongTrade,
+    endLongTrade,
+    startShortTrade,
+    endShortTrade,
+    isEarlySignalFlip,
+    maxBarsBackIndex,
+    bar_index,
+    settings.source,
+    useWorstCase
+)
+
+
+init_table() =>
+    c_transparent = (
+        color.new(
+            color.black,
+            100
+        )
+    )
+
+    table.new(
+        position.top_right,
+        columns=2,
+        rows=7,
+        frame_color=c_transparent,
+        frame_width=1,
+        border_width=1,
+        border_color=c_transparent
+    )
+
+
+update_table(
+    tbl,
+    tradeStatsHeader,
+    totalTrades,
+    totalWins,
+    totalLosses,
+    winLossRatio,
+    winRate,
+    stopLosses) =>
+
+    c_transparent = (
+        color.new(
+            color.black,
+            100
+        )
+    )
+
+    calculatedWinRate = (
+        totalTrades > 0
+        ? totalWins / totalTrades
+        : 0.0
+    )
+
+    calculatedWLRatio = (
+        totalLosses > 0
+        ? totalWins / totalLosses
+        : totalWins
+    )
+
+    table.cell(
+        tbl,
+        0,
+        0,
+        tradeStatsHeader,
+        text_halign=text.align_center,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        0,
+        1,
+        "Winrate",
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        1,
+        1,
+        str.tostring(
+            calculatedWinRate,
+            "#.#%"
+        ),
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        0,
+        2,
+        "Trades",
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        1,
+        2,
+        str.tostring(totalTrades, "#") +
+        " (" +
+        str.tostring(totalWins, "#") +
+        "|" +
+        str.tostring(totalLosses, "#") +
+        ")",
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        0,
+        5,
+        "WL Ratio",
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        1,
+        5,
+        str.tostring(
+            calculatedWLRatio,
+            "0.00"
+        ),
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        0,
+        6,
+        "Early Signal Flips",
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+    table.cell(
+        tbl,
+        1,
+        6,
+        str.tostring(
+            stopLosses,
+            "#"
+        ),
+        text_halign=text.align_center,
+        bgcolor=c_transparent,
+        text_color=color.gray,
+        text_size=size.normal
+    )
+
+
+if showTradeStats
+    var table tbl = (
+        init_table()
+    )
+
+    if barstate.islast
+        update_table(
+            tbl,
+            tradeStatsHeader,
+            totalTrades,
+            totalWins,
+            totalLosses,
+            winLossRatio,
+            winRate,
+            totalEarlySignalFlips
+        )
