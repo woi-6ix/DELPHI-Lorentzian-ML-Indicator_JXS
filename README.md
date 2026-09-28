@@ -4,25 +4,13 @@
 ![Platform](https://img.shields.io/badge/Platform-TradingView-black)
 ![License](https://img.shields.io/badge/License-MPL--2.0-purple)
 
-**DELPHI** is a TradingView strategy adapted from jdehorty's *Machine Learning: Lorentzian Classification*. The title says “Indicator” to retain the JXS name, but the script uses `strategy()` and reports orders in Strategy Tester. It trades changes in a filtered Lorentzian classification signal when the kernel trend agrees.
+**DELPHI** is a TradingView strategy built from jdehorty's Lorentzian Classification. It trades new LC signals when the kernel trend agrees.
 
-## What Lorentzian Classification trading means
+## Lorentzian Classification
 
-Jdehorty's [original TradingView indicator](https://www.tradingview.com/script/WhBzgfDu-Machine-Learning-Lorentzian-Classification/) compares the current bar's indicator readings with patterns from historical bars. The readings can include RSI, WaveTrend, CCI, and ADX. Each selected historical pattern contributes a directional label, and the sum produces a positive or negative vote. This is history-based pattern classification, not a trained neural network or a prediction of option premium.
+[Jdehorty's original indicator](https://www.tradingview.com/script/WhBzgfDu-Machine-Learning-Lorentzian-Classification/) compares current RSI, WaveTrend, CCI, and ADX readings with past bars. Selected past patterns vote long or short. Its logarithmic distance reduces the weight of unusually large differences. The author's “price-time” idea is an analogy for market outliers; the code does not read news.
 
-The script's *Lorentzian distance* adds `log(1 + absolute difference)` across the chosen features. This makes very large feature differences count less than they would in a simple straight-line (Euclidean) comparison. The original author's “price-time” discussion uses unusually disruptive market events as an analogy for outliers; the code does **not** read an FOMC calendar or recognize news. Its approximate neighbor selection is also not a textbook search for the mathematically closest bars.
-
-A positive vote favors the long classification and a negative vote favors the short classification after the enabled market filters. The chart's prediction number and color convey vote direction and intensity, **not a calibrated win probability**. The kernel regression line is a separate trend estimate that DELPHI uses to check the LC signal. Similar past indicator patterns can still lead to different future prices.
-
-**DELPHI trades a change in that LC classification.** It does not enter merely because a bar is colored bullish or bearish, and it does not wait for several consecutive confirmation bars. A new buy or sell signal must pass the enabled market filters, agree with the kernel direction, and occur within the entry window:
-
-| LC event | Additional checks | DELPHI action |
-| --- | --- | --- |
-| Classification changes to long | Bullish kernel, optional EMA/SMA uptrend, closing time from 09:30 to before 15:00 New York | Enter long at that bar's close |
-| Classification changes to short | Bearish kernel, optional EMA/SMA downtrend, same session rule | Enter short at that bar's close |
-| Classification stays the same or a check fails | No new eligible signal | Do not open a new trade |
-
-For example, if the neighbor labels produce a positive vote and the filtered classification flips to long at 10:15, DELPHI buys at that candle's close only if the kernel and any enabled trend filters also agree. Subsequent positive bars alone do not create another entry. The exit and 15:00 cutoff rules below then manage the position. In ARES, LC can be used alongside extra color-bar and price-slope confirmations; those optional ARES confirmations are not part of DELPHI.
+DELPHI enters when the LC signal **changes direction**, the enabled filters pass, and the separate kernel trend agrees. The signal bar must close from 09:30 to before 15:00 New York time. Bars that stay the same color do not create another entry.
 
 ## How the signal is made
 
