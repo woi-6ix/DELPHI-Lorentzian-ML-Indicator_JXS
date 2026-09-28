@@ -10,7 +10,7 @@
 
 [Jdehorty's original indicator](https://www.tradingview.com/script/WhBzgfDu-Machine-Learning-Lorentzian-Classification/) compares current RSI, WaveTrend, CCI, and ADX readings with past bars. Selected past patterns vote long or short. Its logarithmic distance reduces the weight of unusually large differences. The author's “price-time” idea is an analogy for market outliers; the code does not read news.
 
-DELPHI enters when the LC signal **changes direction**, the enabled filters pass, and the separate kernel trend agrees. The signal bar must close from 09:30 to before 15:00 New York time. Bars that stay the same color do not create another entry.
+DELPHI enters when the LC signal **changes direction**, the enabled filters pass, and the separate kernel trend agrees. The signal bar must close within your Trading Session hours (default 09:30 to before 15:00 New York time). Bars that stay the same color do not create another entry.
 
 ## How the signal is made
 
@@ -24,12 +24,14 @@ DELPHI enters when the LC signal **changes direction**, the enabled filters pass
 
 | Event | Strategy action |
 | --- | --- |
-| New long or short setup | Enter at the signal bar's close if its **closing time** is at least 09:30 and before 15:00 in `America/New_York`. An opposite entry can reverse an existing position. |
+| New long or short setup | Enter at the signal bar's close inside your chosen New York trading hours. An opposite entry can reverse; the strategy will not add another entry in the same direction. |
 | Default exit | Follow the original strict four-bar signal exit rules; an opposite entry may reverse first. |
 | Optional dynamic exit | Close on the qualifying opposite kernel rate change. This option only applies when EMA, SMA, and kernel smoothing are all off; otherwise the strict exit applies. |
-| 15:00 cutoff | Close any remaining position when a bar closes **exactly** at 15:00 New York time. No entry can fill on or after that boundary. |
+| Session cutoff | Close any remaining position on the first bar ending at or after your cutoff (default 15:00 New York). No new entries at or after it. |
 
-The strategy uses `process_orders_on_close=true`. In historical Strategy Tester, entries **and ordinary market exits** are simulated at the triggering bar's close. The previously requested next-bar-open normal exits are **not implemented**. The cutoff is also a simulated close fill. Use a time based intraday chart, such as 1 minute or 5 minutes, with a bar closing at 15:00; a chart with no such bar cannot execute the exact cutoff.
+Set **Start hour/minute** and **Cutoff hour/minute** in Trading Session. Times use `America/New_York` and the cutoff must be later than the start on the same day. Use an intraday time based chart. If the chosen cutoff falls between bar closes, the position closes at the next available bar close, which may be later than the selected minute.
+
+With `process_orders_on_close=true`, historical entries **and normal market exits** fill at the signal bar's close. The Pythia execution block does not change that. For next-bar-open market exits, turn off **Process orders on close** in TradingView's strategy properties; entries then also fill at the next bar's open and a signal just before cutoff can fill after it. A single ordinary Pine strategy cannot guarantee close-of-signal entries and next-open exits simultaneously in historical Strategy Tester.
 
 There is **no stop loss or profit target** in this version. Set position size, commissions, and slippage in TradingView's strategy properties. The orders use the chart symbol's price and do not simulate option premium, Greeks, spread fills, or broker execution.
 
@@ -39,7 +41,7 @@ There is **no stop loss or profit target** in this version. Set position size, c
 - **General settings:** Source, neighbor count, maximum history, feature count, color compression, default exit markers, dynamic exits, trade statistics, and historical range.
 - **Filters:** Volatility and regime filters are on by default. ADX, EMA, and SMA trend filters are optional. Kernel agreement is on by default.
 - **Statistics:** The upper-right box comes from the original `ml.backtest()` signal calculation, including win rate, trade count, win/loss ratio, and early signal flips. It is **not** calculated from actual closed `strategy.*` orders. Use Strategy Tester to evaluate the executed orders.
-- **Trade alerts:** Create a TradingView strategy alert for **order fills**; entries, normal exits, and the 15:00 cutoff supply `alert_message` text. Select **Order fills and alert() function calls** if you also want kernel bullish/bearish change messages. Existing TradingView alerts must be recreated after code changes because alerts use a snapshot of the script.
+- **Trade alerts:** Create a TradingView strategy alert for **order fills**; entries, normal exits, and the session cutoff supply `alert_message` text. Select **Order fills and alert() function calls** if you also want kernel bullish/bearish change messages. Existing TradingView alerts must be recreated after code changes because alerts use a snapshot of the script.
 
 ## Use
 
