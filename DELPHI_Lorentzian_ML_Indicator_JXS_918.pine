@@ -1318,11 +1318,7 @@ solid_red_bar_color(float pred) =>
 
 
 solid_bar_color(float pred) =>
-    pred > 0
-    ? solid_green_bar_color(pred)
-    : pred < 0
-    ? solid_red_bar_color(pred)
-    : #787B86
+    pred > 0 ? solid_green_bar_color(pred) : pred < 0 ? solid_red_bar_color(pred) : #787B86
 
 
 c_pred = (
