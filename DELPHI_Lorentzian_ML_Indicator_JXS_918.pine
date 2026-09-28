@@ -1126,7 +1126,12 @@ bool endShortTrade = (
 // DELPHI STRATEGY EXECUTION
 // ============================================================================
 
-if startLongTrade
+// Entries use the confirmed signal bar's close and are blocked outside
+// 09:30–15:00 New York time. An opposite entry reverses the position.
+bool canEnterLong = startLongTrade and delphiInTradingSession and strategy.position_size <= 0
+bool canEnterShort = startShortTrade and delphiInTradingSession and strategy.position_size >= 0
+
+if canEnterLong
     strategy.entry(
         "DELPHI Long",
         strategy.long,
@@ -1134,7 +1139,7 @@ if startLongTrade
         alert_message="DELPHI JXS_918 Open Long | {{ticker}} @ {{strategy.order.price}}"
     )
 
-else if startShortTrade
+if canEnterShort
     strategy.entry(
         "DELPHI Short",
         strategy.short,
@@ -1142,20 +1147,21 @@ else if startShortTrade
         alert_message="DELPHI JXS_918 Open Short | {{ticker}} @ {{strategy.order.price}}"
     )
 
-else
-    if endLongTrade and strategy.position_size > 0
-        strategy.close(
-            "DELPHI Long",
-            comment="DELPHI JXS_918 LONG EXIT",
-            alert_message="DELPHI JXS_918 Close Long | {{ticker}} @ {{strategy.order.price}}"
-        )
+// Normal exits are independent of the entry checks. On a reversal bar,
+// strategy.entry() closes the old side, so do not also submit a close order.
+if endLongTrade and strategy.position_size > 0 and not canEnterShort
+    strategy.close(
+        "DELPHI Long",
+        comment="DELPHI JXS_918 LONG EXIT",
+        alert_message="DELPHI JXS_918 Close Long | {{ticker}} @ {{strategy.order.price}}"
+    )
 
-    if endShortTrade and strategy.position_size < 0
-        strategy.close(
-            "DELPHI Short",
-            comment="DELPHI JXS_918 SHORT EXIT",
-            alert_message="DELPHI JXS_918 Close Short | {{ticker}} @ {{strategy.order.price}}"
-        )
+if endShortTrade and strategy.position_size < 0 and not canEnterLong
+    strategy.close(
+        "DELPHI Short",
+        comment="DELPHI JXS_918 SHORT EXIT",
+        alert_message="DELPHI JXS_918 Close Short | {{ticker}} @ {{strategy.order.price}}"
+    )
 
 
 // Force every remaining trade closed at exactly the 15:00 boundary.
