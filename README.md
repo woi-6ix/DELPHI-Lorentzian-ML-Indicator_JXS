@@ -1,4 +1,4 @@
-# DELPHI Lorentzian ML Indicator_{JXS_918}
+# DELPHI Lorentzian ML Indicator
 
 ![Pine Script](https://img.shields.io/badge/Pine%20Script-v6-blue)
 ![Platform](https://img.shields.io/badge/Platform-TradingView-black)
