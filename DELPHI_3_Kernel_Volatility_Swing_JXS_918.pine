@@ -1,0 +1,437 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+// See https://mozilla.org/MPL/2.0/
+// Kernel regression logic adapted from jdehorty's Lorentzian Classification / Kernel Functions work.
+// DELPHI 3 strategy adaptation: JXS_918.
+
+//@version=6
+//@strategy_alert_message {{strategy.order.alert_message}}
+strategy(
+     title="DELPHI 3 - Kernel Volatility Swing Strategy {JXS_918}",
+     shorttitle="DELPHI 3 JXS_918",
+     overlay=true,
+     pyramiding=0,
+     process_orders_on_close=true,
+     calc_on_order_fills=true,
+     precision=4,
+     max_labels_count=500
+)
+
+import jdehorty/KernelFunctions/2 as kernels
+
+// ============================================================================
+// COLORS
+// ============================================================================
+color cGreen = color.new(#009988, 0)
+color cRed = color.new(#CC3311, 0)
+color cGray = color.new(#787B86, 0)
+color cTransparent = color.new(color.black, 100)
+
+// ============================================================================
+// GENERAL / DIRECTION
+// ============================================================================
+string GROUP_GENERAL = "General"
+bool enableLongs = input.bool(true, "Enable Longs", group=GROUP_GENERAL, inline="dir")
+bool enableShorts = input.bool(true, "Enable Shorts", group=GROUP_GENERAL, inline="dir")
+bool exitOnOppositeKernelFlip = input.bool(true, "Exit on Opposite Kernel Flip", group=GROUP_GENERAL)
+bool closeAtSessionEnd = input.bool(true, "Close Position at Session End", group=GROUP_GENERAL)
+
+// ============================================================================
+// EDITABLE NEW YORK TRADING SESSION
+// Default: 09:30 AM to 03:00 PM America/New_York.
+// Entries are based on the bar's closing timestamp.
+// ============================================================================
+string GROUP_SESSION = "Trading Session"
+string tradeTimezone = input.string("America/New_York", "Timezone", group=GROUP_SESSION)
+int startHour = input.int(9, "Start Hour", minval=0, maxval=23, group=GROUP_SESSION, inline="start")
+int startMinute = input.int(30, "Minute", minval=0, maxval=59, group=GROUP_SESSION, inline="start")
+int endHour = input.int(15, "End Hour", minval=0, maxval=23, group=GROUP_SESSION, inline="end")
+int endMinute = input.int(0, "Minute", minval=0, maxval=59, group=GROUP_SESSION, inline="end")
+
+int startOfDay = startHour * 60 + startMinute
+int endOfDay = endHour * 60 + endMinute
+bool sessionValid = startOfDay < endOfDay
+int barCloseMinute = hour(time_close, tradeTimezone) * 60 + minute(time_close, tradeTimezone)
+
+bool inTradingSession = (
+     timeframe.isintraday and
+     sessionValid and
+     not na(time_close) and
+     barCloseMinute >= startOfDay and
+     barCloseMinute < endOfDay
+)
+
+int cutoffTimestamp = timestamp(
+     tradeTimezone,
+     year(time_close, tradeTimezone),
+     month(time_close, tradeTimezone),
+     dayofmonth(time_close, tradeTimezone),
+     endHour,
+     endMinute
+)
+
+bool sessionCutoffBar = (
+     timeframe.isintraday and
+     sessionValid and
+     not na(time_close) and
+     time_close >= cutoffTimestamp and
+     (na(time_close[1]) or time_close[1] < cutoffTimestamp)
+)
+
+// ============================================================================
+// KERNEL REGRESSION
+// The plotted green/red line is the primary DELPHI 3 trade engine.
+// ============================================================================
+string GROUP_KERNEL = "Kernel Regression"
+float kernelSource = input.source(close, "Source", group=GROUP_KERNEL)
+bool showKernel = input.bool(true, "Show Kernel Line", group=GROUP_KERNEL, inline="display")
+bool useKernelSmoothing = input.bool(false, "Enhanced Smoothing", group=GROUP_KERNEL, inline="display")
+int kernelLookback = input.int(8, "Lookback Window", minval=3, maxval=100, group=GROUP_KERNEL)
+float kernelRelativeWeight = input.float(8.0, "Relative Weighting", minval=0.25, maxval=25.0, step=0.25, group=GROUP_KERNEL)
+int kernelRegressionLevel = input.int(25, "Regression Level", minval=2, maxval=100, group=GROUP_KERNEL)
+int kernelLag = input.int(5, "Smoothing Lag", minval=1, maxval=20, group=GROUP_KERNEL)
+
+float yhat1 = kernels.rationalQuadratic(
+     kernelSource,
+     kernelLookback,
+     kernelRelativeWeight,
+     kernelRegressionLevel
+)
+
+int gaussianLookback = math.max(1, kernelLookback - kernelLag)
+float yhat2 = kernels.gaussian(
+     kernelSource,
+     gaussianLookback,
+     kernelRegressionLevel
+)
+
+bool kernelBullishRate = yhat1 > yhat1[1]
+bool kernelBearishRate = yhat1 < yhat1[1]
+bool kernelBullishSmooth = yhat2 >= yhat1
+bool kernelBearishSmooth = yhat2 <= yhat1
+
+bool kernelBullish = useKernelSmoothing ? kernelBullishSmooth : kernelBullishRate
+bool kernelBearish = useKernelSmoothing ? kernelBearishSmooth : kernelBearishRate
+
+bool kernelBullishFlip = bar_index > 2 and kernelBullish and not kernelBullish[1]
+bool kernelBearishFlip = bar_index > 2 and kernelBearish and not kernelBearish[1]
+
+color kernelColor = kernelBullish ? cGreen : kernelBearish ? cRed : cGray
+plot(showKernel ? yhat1 : na, title="DELPHI 3 Kernel Regression", color=kernelColor, linewidth=2)
+
+// ============================================================================
+// SLOPE FILTER
+// Requires the kernel to have enough directional slope in ATR-normalized terms.
+// A value of 0.05 means the kernel moved 0.05 ATR over the chosen lookback.
+// ============================================================================
+string GROUP_SLOPE = "Slope Filter"
+bool useSlopeFilter = input.bool(true, "Use Slope Filter", group=GROUP_SLOPE)
+int slopeLookbackBars = input.int(2, "Slope Lookback Bars", minval=1, maxval=20, group=GROUP_SLOPE)
+int slopeAtrLength = input.int(14, "ATR Length", minval=1, group=GROUP_SLOPE)
+float minSlopeAtr = input.float(0.05, "Minimum Slope (ATR units)", minval=0.0, step=0.01, group=GROUP_SLOPE)
+
+float slopeAtr = ta.atr(slopeAtrLength)
+float kernelSlopeRaw = yhat1 - yhat1[slopeLookbackBars]
+float kernelSlopeAtr = slopeAtr > 0 ? kernelSlopeRaw / slopeAtr : 0.0
+
+bool longSlopePass = not useSlopeFilter or kernelSlopeAtr >= minSlopeAtr
+bool shortSlopePass = not useSlopeFilter or kernelSlopeAtr <= -minSlopeAtr
+
+// ============================================================================
+// VOLATILITY PUSH FILTER
+// Uses the prior JXS Volatility Push structure:
+//   1 point: ATR expansion
+//   1 point: candle range / ATR expansion
+//   1 point: volume expansion
+// A push qualifies when score >= Min Score (default 2 of 3).
+// Direction also requires a strong directional candle.
+// ============================================================================
+string GROUP_VP = "Volatility Push"
+bool useVolatilityPushFilter = input.bool(true, "Require Volatility Push", group=GROUP_VP)
+bool showVolatilityPush = input.bool(true, "Show VP Markers", group=GROUP_VP)
+int vpConfirmationWindow = input.int(0, "Confirmation Window (bars)", minval=0, maxval=10, group=GROUP_VP, tooltip="0 = the Volatility Push must occur on the same bar as the kernel color change.")
+
+int vpFastAtrLength = input.int(5, "Fast ATR Length", minval=1, group=GROUP_VP, inline="atr")
+int vpSlowAtrLength = input.int(20, "Slow ATR Length", minval=2, group=GROUP_VP, inline="atr")
+float vpMinAtrRatio = input.float(1.10, "Min ATR Ratio", minval=0.1, step=0.05, group=GROUP_VP)
+float vpMinRangeAtr = input.float(1.25, "Min Range / ATR", minval=0.1, step=0.05, group=GROUP_VP)
+int vpVolumeLength = input.int(20, "Volume Average Length", minval=1, group=GROUP_VP)
+float vpMinVolumeRatio = input.float(1.50, "Min Volume Ratio", minval=0.1, step=0.05, group=GROUP_VP)
+int vpMinScore = input.int(2, "Minimum Volatility Score", minval=1, maxval=3, group=GROUP_VP)
+
+float vpMinBodyAtr = input.float(0.80, "Min Body / ATR", minval=0.0, step=0.05, group=GROUP_VP)
+float vpMinBodyRange = input.float(0.65, "Min Body / Candle Range", minval=0.0, maxval=1.0, step=0.05, group=GROUP_VP)
+float vpBullCloseLocation = input.float(0.70, "Bull Close Location >=", minval=0.0, maxval=1.0, step=0.05, group=GROUP_VP)
+float vpBearCloseLocation = input.float(0.30, "Bear Close Location <=", minval=0.0, maxval=1.0, step=0.05, group=GROUP_VP)
+
+float vpFastAtr = ta.atr(vpFastAtrLength)
+float vpSlowAtr = ta.atr(vpSlowAtrLength)
+float vpRange = math.max(high - low, syminfo.mintick)
+float vpBody = math.abs(close - open)
+float vpCloseLocation = (close - low) / vpRange
+float vpVolumeAverage = ta.sma(volume, vpVolumeLength)
+
+float vpAtrRatio = vpSlowAtr > 0 ? vpFastAtr / vpSlowAtr : 0.0
+float vpRangeAtr = vpSlowAtr > 0 ? vpRange / vpSlowAtr : 0.0
+float vpVolumeRatio = vpVolumeAverage > 0 ? volume / vpVolumeAverage : 0.0
+float vpBodyAtr = vpSlowAtr > 0 ? vpBody / vpSlowAtr : 0.0
+float vpBodyRange = vpRange > 0 ? vpBody / vpRange : 0.0
+
+bool vpAtrPoint = vpAtrRatio >= vpMinAtrRatio
+bool vpRangePoint = vpRangeAtr >= vpMinRangeAtr
+bool vpVolumePoint = vpVolumeRatio >= vpMinVolumeRatio
+int vpScore = (vpAtrPoint ? 1 : 0) + (vpRangePoint ? 1 : 0) + (vpVolumePoint ? 1 : 0)
+bool vpQualified = vpScore >= vpMinScore
+
+bool bullDirectionalCandle = (
+     close > open and
+     vpCloseLocation >= vpBullCloseLocation and
+     vpBodyAtr >= vpMinBodyAtr and
+     vpBodyRange >= vpMinBodyRange
+)
+
+bool bearDirectionalCandle = (
+     close < open and
+     vpCloseLocation <= vpBearCloseLocation and
+     vpBodyAtr >= vpMinBodyAtr and
+     vpBodyRange >= vpMinBodyRange
+)
+
+bool bullVolatilityPush = vpQualified and bullDirectionalCandle
+bool bearVolatilityPush = vpQualified and bearDirectionalCandle
+
+int bullPushAge = nz(ta.barssince(bullVolatilityPush), 100000)
+int bearPushAge = nz(ta.barssince(bearVolatilityPush), 100000)
+
+bool bullPushConfirmed = (
+     not useVolatilityPushFilter or
+     (bullPushAge <= vpConfirmationWindow and bullPushAge < bearPushAge)
+)
+
+bool bearPushConfirmed = (
+     not useVolatilityPushFilter or
+     (bearPushAge <= vpConfirmationWindow and bearPushAge < bullPushAge)
+)
+
+plotshape(
+     showVolatilityPush and bullVolatilityPush,
+     title="Bullish Volatility Push",
+     style=shape.triangleup,
+     location=location.belowbar,
+     color=cGreen,
+     size=size.tiny,
+     text="VP+"
+)
+
+plotshape(
+     showVolatilityPush and bearVolatilityPush,
+     title="Bearish Volatility Push",
+     style=shape.triangledown,
+     location=location.abovebar,
+     color=cRed,
+     size=size.tiny,
+     text="VP-"
+)
+
+// ============================================================================
+// 2R PROFIT / STOP MODULE
+// Risk is defined by an ATR stop distance at the actual strategy fill price.
+// Target defaults to exactly 2.0R and is editable.
+// ============================================================================
+string GROUP_RISK = "2R Profit / Stop"
+bool useRiskManagement = input.bool(true, "Use Profit / Stop", group=GROUP_RISK)
+int riskAtrLength = input.int(14, "Risk ATR Length", minval=1, group=GROUP_RISK, inline="risk")
+float stopAtrMultiple = input.float(1.0, "Stop ATR Multiple", minval=0.05, step=0.05, group=GROUP_RISK, inline="risk")
+float rewardRiskMultiple = input.float(2.0, "Profit Target (R)", minval=0.25, step=0.25, group=GROUP_RISK)
+bool showRiskLevels = input.bool(true, "Show Stop / Target", group=GROUP_RISK)
+
+float riskAtr = ta.atr(riskAtrLength)
+
+var float longStop = na
+var float longTarget = na
+var float shortStop = na
+var float shortTarget = na
+
+// ============================================================================
+// ENTRY CONDITIONS
+// The kernel color flip is the trigger. Slope + VP are confirmations.
+// ============================================================================
+bool longEntrySignal = (
+     enableLongs and
+     inTradingSession and
+     kernelBullishFlip and
+     longSlopePass and
+     bullPushConfirmed
+)
+
+bool shortEntrySignal = (
+     enableShorts and
+     inTradingSession and
+     kernelBearishFlip and
+     shortSlopePass and
+     bearPushConfirmed
+)
+
+bool canEnterLong = longEntrySignal and strategy.position_size <= 0
+bool canEnterShort = shortEntrySignal and strategy.position_size >= 0
+
+if canEnterLong
+    strategy.entry(
+         "DELPHI 3 Long",
+         strategy.long,
+         comment="DELPHI 3 LONG",
+         alert_message="DELPHI 3 LONG | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+else if canEnterShort
+    strategy.entry(
+         "DELPHI 3 Short",
+         strategy.short,
+         comment="DELPHI 3 SHORT",
+         alert_message="DELPHI 3 SHORT | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+// ============================================================================
+// LOCK RISK LEVELS AFTER AN ACTUAL FILL
+// ============================================================================
+bool newLongPosition = strategy.position_size > 0 and strategy.position_size[1] <= 0
+bool newShortPosition = strategy.position_size < 0 and strategy.position_size[1] >= 0
+
+if newLongPosition
+    float riskDistance = riskAtr * stopAtrMultiple
+    longStop := strategy.position_avg_price - riskDistance
+    longTarget := strategy.position_avg_price + riskDistance * rewardRiskMultiple
+    shortStop := na
+    shortTarget := na
+
+if newShortPosition
+    float riskDistance = riskAtr * stopAtrMultiple
+    shortStop := strategy.position_avg_price + riskDistance
+    shortTarget := strategy.position_avg_price - riskDistance * rewardRiskMultiple
+    longStop := na
+    longTarget := na
+
+// ============================================================================
+// 2R EXITS
+// ============================================================================
+if useRiskManagement and strategy.position_size > 0 and not na(longStop) and not na(longTarget)
+    strategy.exit(
+         "DELPHI 3 Long Risk Exit",
+         from_entry="DELPHI 3 Long",
+         stop=longStop,
+         limit=longTarget,
+         comment="DELPHI 3 LONG 2R/STOP",
+         alert_message="DELPHI 3 LONG EXIT | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+if useRiskManagement and strategy.position_size < 0 and not na(shortStop) and not na(shortTarget)
+    strategy.exit(
+         "DELPHI 3 Short Risk Exit",
+         from_entry="DELPHI 3 Short",
+         stop=shortStop,
+         limit=shortTarget,
+         comment="DELPHI 3 SHORT 2R/STOP",
+         alert_message="DELPHI 3 SHORT EXIT | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+// ============================================================================
+// OPPOSITE KERNEL FLIP EXIT
+// If the opposite flip ALSO qualifies for a new trade, strategy.entry handles
+// the reversal. Otherwise the current swing trade is closed.
+// ============================================================================
+if exitOnOppositeKernelFlip and strategy.position_size > 0 and kernelBearishFlip and not canEnterShort
+    strategy.close(
+         "DELPHI 3 Long",
+         comment="DELPHI 3 OPPOSITE KERNEL EXIT",
+         alert_message="DELPHI 3 CLOSE LONG - KERNEL FLIP | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+if exitOnOppositeKernelFlip and strategy.position_size < 0 and kernelBullishFlip and not canEnterLong
+    strategy.close(
+         "DELPHI 3 Short",
+         comment="DELPHI 3 OPPOSITE KERNEL EXIT",
+         alert_message="DELPHI 3 CLOSE SHORT - KERNEL FLIP | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+// ============================================================================
+// SESSION CUTOFF
+// ============================================================================
+if closeAtSessionEnd and sessionCutoffBar and strategy.position_size != 0
+    strategy.close_all(
+         comment="DELPHI 3 SESSION CUTOFF",
+         immediately=true,
+         alert_message="DELPHI 3 SESSION CUTOFF | {{ticker}} @ {{strategy.order.price}}"
+    )
+
+// Reset plotted levels after a completed exit.
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    longStop := na
+    longTarget := na
+    shortStop := na
+    shortTarget := na
+
+// ============================================================================
+// CHART SIGNALS
+// ============================================================================
+plotshape(
+     longEntrySignal,
+     title="DELPHI 3 Long Signal",
+     style=shape.labelup,
+     location=location.belowbar,
+     color=cGreen,
+     textcolor=color.white,
+     size=size.small,
+     text="D3 L"
+)
+
+plotshape(
+     shortEntrySignal,
+     title="DELPHI 3 Short Signal",
+     style=shape.labeldown,
+     location=location.abovebar,
+     color=cRed,
+     textcolor=color.white,
+     size=size.small,
+     text="D3 S"
+)
+
+plot(
+     showRiskLevels and strategy.position_size > 0 ? longStop : na,
+     title="Long Stop",
+     color=color.new(cRed, 10),
+     linewidth=1,
+     style=plot.style_linebr
+)
+
+plot(
+     showRiskLevels and strategy.position_size > 0 ? longTarget : na,
+     title="Long 2R Target",
+     color=color.new(cGreen, 10),
+     linewidth=1,
+     style=plot.style_linebr
+)
+
+plot(
+     showRiskLevels and strategy.position_size < 0 ? shortStop : na,
+     title="Short Stop",
+     color=color.new(cRed, 10),
+     linewidth=1,
+     style=plot.style_linebr
+)
+
+plot(
+     showRiskLevels and strategy.position_size < 0 ? shortTarget : na,
+     title="Short 2R Target",
+     color=color.new(cGreen, 10),
+     linewidth=1,
+     style=plot.style_linebr
+)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+alertcondition(longEntrySignal, title="DELPHI 3 Long Setup", message="DELPHI 3 Long Setup | {{ticker}} @ {{close}}")
+alertcondition(shortEntrySignal, title="DELPHI 3 Short Setup", message="DELPHI 3 Short Setup | {{ticker}} @ {{close}}")
+alertcondition(kernelBullishFlip, title="DELPHI 3 Kernel Green Flip", message="DELPHI 3 Kernel Green Flip | {{ticker}} @ {{close}}")
+alertcondition(kernelBearishFlip, title="DELPHI 3 Kernel Red Flip", message="DELPHI 3 Kernel Red Flip | {{ticker}} @ {{close}}")
+alertcondition(bullVolatilityPush, title="DELPHI 3 Bullish Volatility Push", message="DELPHI 3 Bullish Volatility Push | {{ticker}} @ {{close}}")
+alertcondition(bearVolatilityPush, title="DELPHI 3 Bearish Volatility Push", message="DELPHI 3 Bearish Volatility Push | {{ticker}} @ {{close}}")
