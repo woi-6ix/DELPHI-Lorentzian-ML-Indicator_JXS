@@ -1,0 +1,137 @@
+// DELPHI 3 — Kernel Swing Strategy
+// Derived from jdehorty's Lorentzian Classification kernel section.
+// Original code © jdehorty, licensed under MPL 2.0:
+// https://mozilla.org/MPL/2.0/
+//@version=6
+strategy("DELPHI 3 | Kernel Swing Strategy", shorttitle="DELPHI 3", overlay=true, pyramiding=0, process_orders_on_close=true, calc_on_every_tick=false, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+// Trading session: America/New_York observes EST/EDT automatically.
+tradeSession = input.session("0930-1500", "Entry hours (New York)", group="Trading Hours")
+closeAtEnd = input.bool(true, "Close positions at session end", group="Trading Hours")
+inSession = not na(time(timeframe.period, tradeSession, "America/New_York"))
+sessionEnded = not inSession and inSession[1]
+
+// Original kernel settings
+src = input.source(close, "Source", group="Kernel Regression")
+h = input.int(8, "Lookback Window", minval=3, group="Kernel Regression")
+r = input.float(8.0, "Relative Weighting", minval=0.25, step=0.25, group="Kernel Regression")
+x = input.int(25, "Regression Level", minval=2, group="Kernel Regression")
+smooth = input.bool(false, "Use smoothed kernel colour", group="Kernel Regression")
+lag = input.int(2, "Gaussian lag", minval=1, maxval=10, group="Kernel Regression")
+showKernel = input.bool(true, "Show kernel line", group="Kernel Regression")
+
+// Kernel regression functions use historical bars only.
+rqKernel(series float source, int lookback, float weight, int level) =>
+    float sumWeights = 0.0
+    float sumValues = 0.0
+    for i = 0 to level + lookback
+        float w = math.pow(1.0 + (i * i) / (2.0 * lookback * lookback * weight), -weight)
+        sumValues += source[i] * w
+        sumWeights += w
+    sumValues / sumWeights
+
+gaussianKernel(series float source, int lookback, int level) =>
+    float sumWeights = 0.0
+    float sumValues = 0.0
+    for i = 0 to level + lookback
+        float w = math.exp(-(i * i) / (2.0 * lookback * lookback))
+        sumValues += source[i] * w
+        sumWeights += w
+    sumValues / sumWeights
+
+yhat1 = rqKernel(src, h, r, x)
+yhat2 = gaussianKernel(src, math.max(h - lag, 1), x)
+bullish = smooth ? yhat2 >= yhat1 : yhat1 > yhat1[1]
+bearish = smooth ? yhat2 < yhat1 : yhat1 < yhat1[1]
+turnGreen = bullish and not bullish[1]
+turnRed = bearish and not bearish[1]
+plot(showKernel ? yhat1 : na, "Kernel regression", color=bullish ? #009988 : #CC3311, linewidth=3)
+
+// Optional slope confirmation. Threshold is ATR units per bar.
+useSlope = input.bool(true, "Require directional slope", group="Slope Filter")
+slopeBars = input.int(1, "Slope measurement bars", minval=1, group="Slope Filter")
+minSlopeAtr = input.float(0.0, "Minimum slope (ATR per bar)", minval=0.0, step=0.01, group="Slope Filter")
+atrLen = input.int(14, "ATR length", minval=1, group="Risk Management")
+atr = ta.atr(atrLen)
+slope = (yhat1 - yhat1[slopeBars]) / slopeBars
+slopePassLong = not useSlope or slope > atr * minSlopeAtr
+slopePassShort = not useSlope or slope < -atr * minSlopeAtr
+
+// Directional volatility push: a strong candle backed by relative volume.
+// This is a configurable proxy, not a separate third-party indicator.
+usePush = input.bool(true, "Require directional volatility push", group="Volatility Push")
+volumeLen = input.int(20, "Volume average length", minval=1, group="Volatility Push")
+volumeMultiple = input.float(1.2, "Minimum relative volume", minval=0.1, step=0.1, group="Volatility Push")
+bodyAtrMultiple = input.float(0.35, "Minimum candle body / ATR", minval=0.0, step=0.05, group="Volatility Push")
+allowMissingVolume = input.bool(false, "Allow missing volume data", group="Volatility Push")
+avgVolume = ta.sma(volume, volumeLen)
+volumePass = (na(volume) or na(avgVolume)) ? allowMissingVolume : volume >= avgVolume * volumeMultiple
+bodyPass = math.abs(close - open) >= atr * bodyAtrMultiple
+pushLong = close > open and bodyPass and volumePass
+pushShort = close < open and bodyPass and volumePass
+pushPassLong = not usePush or pushLong
+pushPassShort = not usePush or pushShort
+
+// Optional 200-period trend filters
+useEma = input.bool(false, "Enable EMA filter", group="Trend Filters")
+emaLen = input.int(200, "EMA length", minval=1, group="Trend Filters")
+useSma = input.bool(false, "Enable SMA filter", group="Trend Filters")
+smaLen = input.int(200, "SMA length", minval=1, group="Trend Filters")
+ema = ta.ema(close, emaLen)
+sma = ta.sma(close, smaLen)
+trendLong = (not useEma or close > ema) and (not useSma or close > sma)
+trendShort = (not useEma or close < ema) and (not useSma or close < sma)
+plot(useEma ? ema : na, "EMA", color=color.orange)
+plot(useSma ? sma : na, "SMA", color=color.blue)
+
+// Risk is fixed from the signal bar's closing price.
+stopAtr = input.float(1.0, "Stop distance (ATR)", minval=0.1, step=0.1, group="Risk Management")
+rewardR = input.float(2.0, "Take-profit (R)", minval=0.1, step=0.25, group="Risk Management")
+exitOnFlip = input.bool(true, "Exit on opposing kernel colour", group="Risk Management")
+var float activeStop = na
+var float activeTarget = na
+var int entryBar = na
+
+longSignal = barstate.isconfirmed and inSession and turnGreen and slopePassLong and pushPassLong and trendLong
+shortSignal = barstate.isconfirmed and inSession and turnRed and slopePassShort and pushPassShort and trendShort
+
+// An opposing kernel flip can close an existing swing even if new-entry filters fail.
+if exitOnFlip and strategy.position_size > 0 and turnRed and not shortSignal
+    strategy.close("Long", comment="Kernel red exit")
+if exitOnFlip and strategy.position_size < 0 and turnGreen and not longSignal
+    strategy.close("Short", comment="Kernel green exit")
+
+if longSignal and strategy.position_size <= 0 and not na(atr)
+    float risk = atr * stopAtr
+    activeStop := close - risk
+    activeTarget := close + risk * rewardR
+    entryBar := bar_index
+    strategy.entry("Long", strategy.long, comment="DELPHI 3 BUY", alert_message="DELPHI 3 BUY")
+    strategy.exit("Long 2R", "Long", stop=activeStop, limit=activeTarget, alert_message="DELPHI 3 LONG EXIT")
+
+if shortSignal and strategy.position_size >= 0 and not na(atr)
+    float risk = atr * stopAtr
+    activeStop := close + risk
+    activeTarget := close - risk * rewardR
+    entryBar := bar_index
+    strategy.entry("Short", strategy.short, comment="DELPHI 3 SELL", alert_message="DELPHI 3 SELL")
+    strategy.exit("Short 2R", "Short", stop=activeStop, limit=activeTarget, alert_message="DELPHI 3 SHORT EXIT")
+
+// Maintain bracket orders without recalculating risk each candle.
+if strategy.position_size > 0 and not na(activeStop)
+    strategy.exit("Long 2R", "Long", stop=activeStop, limit=activeTarget)
+if strategy.position_size < 0 and not na(activeStop)
+    strategy.exit("Short 2R", "Short", stop=activeStop, limit=activeTarget)
+
+// On intraday charts, flatten at the close of the final session bar.
+// This uses the next bar's session status to identify the boundary.
+lastSessionBar = inSession and not na(time(timeframe.period, tradeSession, "America/New_York")) and na(time_close(timeframe.period, tradeSession, "America/New_York")[1]) == false and hour(time_close, "America/New_York") == 15 and minute(time_close, "America/New_York") == 0
+if closeAtEnd and barstate.isconfirmed and (lastSessionBar or sessionEnded)
+    strategy.close_all(comment="Session close")
+
+plot(strategy.position_size != 0 ? activeStop : na, "Active stop", color=color.red, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? activeTarget : na, "Active 2R target", color=color.lime, style=plot.style_linebr)
+plotshape(longSignal, title="DELPHI 3 Buy", style=shape.labelup, location=location.belowbar, color=#009988, text="D3 BUY", textcolor=color.white, size=size.tiny)
+plotshape(shortSignal, title="DELPHI 3 Sell", style=shape.labeldown, location=location.abovebar, color=#CC3311, text="D3 SELL", textcolor=color.white, size=size.tiny)
+alertcondition(longSignal, "DELPHI 3 Buy", "DELPHI 3 BUY | {{ticker}} | {{interval}}")
+alertcondition(shortSignal, "DELPHI 3 Sell", "DELPHI 3 SELL | {{ticker}} | {{interval}}")
