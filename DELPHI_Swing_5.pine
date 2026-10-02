@@ -1,0 +1,681 @@
+//@version=6
+strategy(
+    title = "DELPHI 5 ATR-KST Strategy_{JXS_918}",
+    shorttitle = "DELPHI 5",
+    overlay = true,
+    precision = 4,
+    pyramiding = 0,
+    process_orders_on_close = true,
+    default_qty_type = strategy.percent_of_equity,
+    default_qty_value = 100,
+    max_labels_count = 500
+)
+
+// ============================================================================
+// DELPHI 5 ATR-KST SWING STRATEGY [JXS_918]
+// ============================================================================
+//
+// LONG:
+//   ATRibbon Pro LONG arrow + MC KST bullish bias + active session.
+//
+// SHORT:
+//   ATRibbon Pro SHORT arrow + MC KST bearish bias + active session.
+//
+// EXITS:
+//   ATR-based 1R stop.
+//   Editable R-multiple profit target (default 2R).
+//   Opposite valid setup can reverse the position.
+//   Mandatory same-day flatten at the session cutoff.
+//   No overnight positions.
+//
+// ============================================================================
+
+
+// ============================================================================
+// 1. SESSION / EXECUTION
+// ============================================================================
+
+groupSession = "1 · Session / Execution"
+
+tradeTimezone = input.string("America/New_York", "Trading Timezone", group = groupSession)
+
+sessionStartHour = input.int(9, "Start Hour", minval = 0, maxval = 23, inline = "START", group = groupSession)
+sessionStartMinute = input.int(30, "Minute", minval = 0, maxval = 59, inline = "START", group = groupSession)
+
+sessionEndHour = input.int(15, "End Hour", minval = 0, maxval = 23, inline = "END", group = groupSession)
+sessionEndMinute = input.int(0, "Minute", minval = 0, maxval = 59, inline = "END", group = groupSession)
+
+startMinutes = sessionStartHour * 60 + sessionStartMinute
+endMinutes = sessionEndHour * 60 + sessionEndMinute
+
+barOpenMinutes = hour(time, tradeTimezone) * 60 + minute(time, tradeTimezone)
+barCloseMinutes = hour(time_close, tradeTimezone) * 60 + minute(time_close, tradeTimezone)
+
+isWeekday = dayofweek != dayofweek.saturday and dayofweek != dayofweek.sunday
+
+inTradingSession = isWeekday and barOpenMinutes >= startMinutes and barOpenMinutes < endMinutes
+
+// Final bar whose close reaches the cutoff is reserved for flattening.
+// Example on 2-minute chart with 15:00 cutoff: 14:58 -> 15:00.
+endOfDayBar = inTradingSession and barCloseMinutes >= endMinutes
+canEnterSession = inTradingSession and barCloseMinutes < endMinutes
+pastSessionCutoff = isWeekday and barOpenMinutes >= endMinutes
+
+
+// ============================================================================
+// 2. LC-STYLE THEME
+// ============================================================================
+
+groupTheme = "2 · LC Theme"
+
+bullColor = input.color(#009988, "Bullish", inline = "COL", group = groupTheme)
+bearColor = input.color(#CC3311, "Bearish", inline = "COL", group = groupTheme)
+neutralColor = input.color(#787B86, "Neutral", inline = "COL", group = groupTheme)
+
+showRibbon = input.bool(true, "Show ATR Ribbon", group = groupTheme)
+showRail = input.bool(true, "Show ATR Trend Rail", group = groupTheme)
+showSourceArrows = input.bool(true, "Show ATRibbon Source Arrows", group = groupTheme)
+showEntryLabels = input.bool(true, "Show DELPHI 5 Entry Labels", group = groupTheme)
+showRiskLines = input.bool(true, "Show Active Stop / Target", group = groupTheme)
+showStats = input.bool(true, "Show LC-Style Stats", group = groupTheme)
+
+
+// ============================================================================
+// 3. ATRIBBON PRO — TREND ENGINE
+// ============================================================================
+
+groupRibbon = "3 · ATRibbon Pro"
+
+ribbonSource = input.source(close, "Source", group = groupRibbon)
+baseFast = input.int(8, "Fast Base Length", minval = 2, maxval = 100, group = groupRibbon)
+baseMid1 = input.int(13, "Mid 1 Base Length", minval = 3, maxval = 150, group = groupRibbon)
+baseMid2 = input.int(21, "Mid 2 Base Length", minval = 4, maxval = 200, group = groupRibbon)
+baseSlow1 = input.int(34, "Slow 1 Base Length", minval = 5, maxval = 250, group = groupRibbon)
+baseSlow2 = input.int(55, "Slow 2 Base Length", minval = 6, maxval = 300, group = groupRibbon)
+baseAnchor = input.int(89, "Anchor Base Length", minval = 8, maxval = 400, group = groupRibbon)
+volLookback = input.int(100, "Volatility Lookback", minval = 20, maxval = 300, group = groupRibbon)
+adaptStrength = input.float(0.55, "Adapt Strength", minval = 0.0, maxval = 1.5, step = 0.05, group = groupRibbon)
+
+
+// ============================================================================
+// 4. ATRIBBON PRO — RISK RAIL
+// ============================================================================
+
+groupRail = "4 · ATRibbon Risk Rail"
+
+ribbonAtrLength = input.int(14, "ATR Length", minval = 1, maxval = 100, group = groupRail)
+ribbonAtrMultiplier = input.float(2.6, "ATR Rail Multiplier", minval = 0.2, maxval = 10.0, step = 0.1, group = groupRail)
+railSourceSetting = input.string("Ribbon Mid", "ATR Rail Basis", options = ["Ribbon Mid", "Close", "HL2"], group = groupRail)
+
+
+// ============================================================================
+// 5. ATRIBBON PRO — ADX CONFIRMATION
+// ============================================================================
+
+groupADX = "5 · ATRibbon Confirmation"
+
+useRibbonAdx = input.bool(true, "Use ADX Filter", group = groupADX)
+ribbonDiLength = input.int(14, "DI Length", minval = 1, maxval = 100, group = groupADX)
+ribbonAdxSmoothing = input.int(14, "ADX Smoothing", minval = 1, maxval = 100, group = groupADX)
+ribbonAdxThreshold = input.float(18.0, "ADX Threshold", minval = 1.0, maxval = 80.0, step = 0.5, group = groupADX)
+
+
+// ============================================================================
+// 6. FUNCTIONS
+// ============================================================================
+
+f_clamp(float value, float low, float high) =>
+    math.max(math.min(value, high), low)
+
+f_adaptiveEma(series float source, simple int baseLength, series float volRatio, simple float strength) =>
+    dynLength = f_clamp(baseLength * (1.0 - (volRatio - 1.0) * strength), math.max(2.0, baseLength * 0.35), baseLength * 2.25)
+    alpha = 2.0 / (dynLength + 1.0)
+    var float out = na
+    out := na(out[1]) ? source : out[1] + alpha * (source - out[1])
+    out
+
+// KST helper.
+// Local variables are used deliberately so Pine does not have to parse a
+// multi-line arithmetic continuation after the function arrow.
+f_kst(s, r1, r2, r3, r4, m1, m2, m3, m4) =>
+    k1 = ta.sma(ta.roc(s, r1), m1)
+    k2 = ta.sma(ta.roc(s, r2), m2)
+    k3 = ta.sma(ta.roc(s, r3), m3)
+    k4 = ta.sma(ta.roc(s, r4), m4)
+    weightedKst = k1 + k2 * 2.0 + k3 * 3.0 + k4 * 4.0
+    weightedKst
+
+
+// ============================================================================
+// 7. ATRIBBON CALCULATIONS
+// ============================================================================
+
+ribbonAtr = ta.atr(ribbonAtrLength)
+atrAverage = ta.sma(ribbonAtr, volLookback)
+volRatioRaw = atrAverage > 0 ? ribbonAtr / atrAverage : 1.0
+volRatio = f_clamp(volRatioRaw, 0.35, 2.75)
+
+emaFast = f_adaptiveEma(ribbonSource, baseFast, volRatio, adaptStrength)
+emaMid1 = f_adaptiveEma(ribbonSource, baseMid1, volRatio, adaptStrength)
+emaMid2 = f_adaptiveEma(ribbonSource, baseMid2, volRatio, adaptStrength)
+emaSlow1 = f_adaptiveEma(ribbonSource, baseSlow1, volRatio, adaptStrength)
+emaSlow2 = f_adaptiveEma(ribbonSource, baseSlow2, volRatio, adaptStrength)
+emaAnchor = f_adaptiveEma(ribbonSource, baseAnchor, volRatio, adaptStrength)
+
+ribbonMid = (emaMid2 + emaSlow1) / 2.0
+
+[plusDI, minusDI, ribbonAdx] = ta.dmi(ribbonDiLength, ribbonAdxSmoothing)
+
+adxStrengthOK = not useRibbonAdx or ribbonAdx >= ribbonAdxThreshold
+directionalBullOK = plusDI >= minusDI or not useRibbonAdx
+directionalBearOK = minusDI >= plusDI or not useRibbonAdx
+
+railBasis = railSourceSetting == "Close" ? close : railSourceSetting == "HL2" ? hl2 : ribbonMid
+longCandidateStop = railBasis - ribbonAtr * ribbonAtrMultiplier
+shortCandidateStop = railBasis + ribbonAtr * ribbonAtrMultiplier
+
+var float ribbonTrendStop = na
+var int ribbonRailDirection = 0
+
+previousTrendStop = nz(ribbonTrendStop[1], railBasis)
+previousRailDirection = nz(ribbonRailDirection[1], close >= railBasis ? 1 : -1)
+
+if previousRailDirection == 1
+    ribbonTrendStop := math.max(longCandidateStop, previousTrendStop)
+    ribbonRailDirection := close < ribbonTrendStop ? -1 : 1
+else
+    ribbonTrendStop := math.min(shortCandidateStop, previousTrendStop)
+    ribbonRailDirection := close > ribbonTrendStop ? 1 : -1
+
+if ribbonRailDirection != previousRailDirection
+    ribbonTrendStop := ribbonRailDirection == 1 ? longCandidateStop : shortCandidateStop
+
+var int ribbonRegime = 0
+
+if ribbonRailDirection == 1
+    ribbonRegime := 1
+else if ribbonRailDirection == -1
+    ribbonRegime := -1
+else
+    ribbonRegime := nz(ribbonRegime[1], close >= railBasis ? 1 : -1)
+
+ribbonTrendFlip = ribbonRegime != ribbonRegime[1]
+ribbonAdxDirectionOK = ribbonRegime == 1 ? directionalBullOK : ribbonRegime == -1 ? directionalBearOK : false
+ribbonAdxFilterPassed = not useRibbonAdx or (adxStrengthOK and ribbonAdxDirectionOK)
+
+ribbonBullFlip = ribbonTrendFlip and ribbonRegime == 1
+ribbonBearFlip = ribbonTrendFlip and ribbonRegime == -1
+
+// These are the same ATRibbon Pro arrow events used as the DELPHI 5 trigger.
+atrRibbonLongArrow = ribbonBullFlip and ribbonAdxFilterPassed
+atrRibbonShortArrow = ribbonBearFlip and ribbonAdxFilterPassed
+
+
+// ============================================================================
+// 8. MC KST — SHORT CYCLE
+// ============================================================================
+
+groupKSTShort = "6 · MC KST Short Cycle"
+
+kstSource = input.source(close, "KST Price Source", group = groupKSTShort)
+
+kstSR1 = input.int(10, "ROC 1", minval = 1, inline = "SR", group = groupKSTShort)
+kstSR2 = input.int(15, "ROC 2", minval = 1, inline = "SR", group = groupKSTShort)
+kstSR3 = input.int(20, "ROC 3", minval = 1, inline = "SR2", group = groupKSTShort)
+kstSR4 = input.int(30, "ROC 4", minval = 1, inline = "SR2", group = groupKSTShort)
+
+kstSS1 = input.int(10, "SMA 1", minval = 1, inline = "SS", group = groupKSTShort)
+kstSS2 = input.int(10, "SMA 2", minval = 1, inline = "SS", group = groupKSTShort)
+kstSS3 = input.int(10, "SMA 3", minval = 1, inline = "SS2", group = groupKSTShort)
+kstSS4 = input.int(15, "SMA 4", minval = 1, inline = "SS2", group = groupKSTShort)
+
+kstSignalLength = input.int(9, "Signal SMA", minval = 1, group = groupKSTShort)
+
+
+// ============================================================================
+// 9. MC KST — INTERMEDIATE CYCLE
+// ============================================================================
+
+groupKSTIntermediate = "7 · MC KST Intermediate Cycle"
+
+kstIR1 = input.int(20, "ROC 1", minval = 1, inline = "IR", group = groupKSTIntermediate)
+kstIR2 = input.int(30, "ROC 2", minval = 1, inline = "IR", group = groupKSTIntermediate)
+kstIR3 = input.int(40, "ROC 3", minval = 1, inline = "IR2", group = groupKSTIntermediate)
+kstIR4 = input.int(65, "ROC 4", minval = 1, inline = "IR2", group = groupKSTIntermediate)
+
+kstIS1 = input.int(10, "SMA 1", minval = 1, inline = "IS", group = groupKSTIntermediate)
+kstIS2 = input.int(10, "SMA 2", minval = 1, inline = "IS", group = groupKSTIntermediate)
+kstIS3 = input.int(10, "SMA 3", minval = 1, inline = "IS2", group = groupKSTIntermediate)
+kstIS4 = input.int(15, "SMA 4", minval = 1, inline = "IS2", group = groupKSTIntermediate)
+
+
+// ============================================================================
+// 10. MC KST — LONG CYCLE
+// ============================================================================
+
+groupKSTLong = "8 · MC KST Long Cycle"
+
+kstLR1 = input.int(40, "ROC 1", minval = 1, inline = "LR", group = groupKSTLong)
+kstLR2 = input.int(65, "ROC 2", minval = 1, inline = "LR", group = groupKSTLong)
+kstLR3 = input.int(75, "ROC 3", minval = 1, inline = "LR2", group = groupKSTLong)
+kstLR4 = input.int(100, "ROC 4", minval = 1, inline = "LR2", group = groupKSTLong)
+
+kstLS1 = input.int(15, "SMA 1", minval = 1, inline = "LS", group = groupKSTLong)
+kstLS2 = input.int(15, "SMA 2", minval = 1, inline = "LS", group = groupKSTLong)
+kstLS3 = input.int(15, "SMA 3", minval = 1, inline = "LS2", group = groupKSTLong)
+kstLS4 = input.int(20, "SMA 4", minval = 1, inline = "LS2", group = groupKSTLong)
+
+
+// ============================================================================
+// 11. MC KST — BIAS ENGINE
+// ============================================================================
+
+groupKSTBias = "9 · MC KST Bias"
+
+kstTrendMaType = input.string("EMA", "Price Trend MA", options = ["EMA", "SMA"], inline = "MA", group = groupKSTBias)
+kstTrendMaLength = input.int(50, "Length", minval = 1, inline = "MA", group = groupKSTBias)
+
+kstUseDivergence = input.bool(true, "Use Divergence Vote", group = groupKSTBias)
+kstUseRegularDiv = input.bool(true, "Regular", inline = "DIV", group = groupKSTBias)
+kstUseHiddenDiv = input.bool(true, "Hidden", inline = "DIV", group = groupKSTBias)
+kstPivotLeft = input.int(5, "Pivot Left", minval = 1, inline = "PIV", group = groupKSTBias)
+kstPivotRight = input.int(5, "Pivot Right", minval = 1, inline = "PIV", group = groupKSTBias)
+kstMaxPivotDistance = input.int(60, "Max Pivot Distance", minval = 5, group = groupKSTBias)
+
+weightShortKST = input.int(30, "KST / Signal", minval = 0, inline = "W1", group = groupKSTBias)
+weightLongKST = input.int(30, "Long-Term", minval = 0, inline = "W1", group = groupKSTBias)
+weightPriceLocation = input.int(20, "Price Location", minval = 0, inline = "W2", group = groupKSTBias)
+weightDivergence = input.int(20, "Divergence", minval = 0, inline = "W2", group = groupKSTBias)
+
+
+// ============================================================================
+// 12. MC KST NORMALIZATION
+// ============================================================================
+
+groupKSTNorm = "10 · MC KST Normalization"
+
+kstDisplayMode = input.string(
+    "Z-Score (statistical)",
+    "Normalization",
+    options = ["Raw (native KST)", "Z-Score (statistical)", "Robust Z (median/MAD)"],
+    group = groupKSTNorm
+)
+
+kstStatLength = input.int(200, "Statistical Window", minval = 20, group = groupKSTNorm)
+
+
+// ============================================================================
+// 13. MC KST CALCULATIONS
+// ============================================================================
+
+shortKST = f_kst(kstSource, kstSR1, kstSR2, kstSR3, kstSR4, kstSS1, kstSS2, kstSS3, kstSS4)
+intermediateKST = f_kst(kstSource, kstIR1, kstIR2, kstIR3, kstIR4, kstIS1, kstIS2, kstIS3, kstIS4)
+longKST = f_kst(kstSource, kstLR1, kstLR2, kstLR3, kstLR4, kstLS1, kstLS2, kstLS3, kstLS4)
+shortKSTSignal = ta.sma(shortKST, kstSignalLength)
+
+kstModeRaw = kstDisplayMode == "Raw (native KST)"
+kstModeRobust = kstDisplayMode == "Robust Z (median/MAD)"
+
+kstMean = ta.sma(shortKST, kstStatLength)
+kstStdDev = ta.stdev(shortKST, kstStatLength)
+kstMedian = ta.percentile_linear_interpolation(shortKST, kstStatLength, 50)
+kstMad = ta.percentile_linear_interpolation(math.abs(shortKST - kstMedian), kstStatLength, 50)
+
+f_normalizeShort(x) =>
+    float normalized = x
+    if not kstModeRaw
+        if kstModeRobust
+            normalized := not na(kstMad) and kstMad != 0 ? 0.6745 * (x - kstMedian) / kstMad : 0.0
+        else
+            normalized := not na(kstStdDev) and kstStdDev != 0 ? (x - kstMean) / kstStdDev : 0.0
+    normalized
+
+normalizedShortKST = f_normalizeShort(shortKST)
+normalizedKSTSignal = f_normalizeShort(shortKSTSignal)
+
+kstTrendMA = kstTrendMaType == "EMA" ? ta.ema(close, kstTrendMaLength) : ta.sma(close, kstTrendMaLength)
+kstPriceUp = close > kstTrendMA
+
+kstShortBull = normalizedShortKST > normalizedKSTSignal
+kstLongUp = longKST > longKST[1]
+kstLongDown = longKST < longKST[1]
+
+kstWarmupRequirement = kstModeRaw ? math.max(kstSR4, kstSS4) + kstSignalLength : kstStatLength
+kstReady = bar_index >= kstWarmupRequirement
+
+
+// ============================================================================
+// 14. MC KST DIVERGENCE VOTE
+// ============================================================================
+
+kstPivotHighFound = not na(ta.pivothigh(normalizedShortKST, kstPivotLeft, kstPivotRight))
+kstPivotLowFound = not na(ta.pivotlow(normalizedShortKST, kstPivotLeft, kstPivotRight))
+
+var float previousLowOsc = na
+var float previousLowPrice = na
+var int previousLowBar = na
+
+var float previousHighOsc = na
+var float previousHighPrice = na
+var int previousHighBar = na
+
+kstBullRegular = false
+kstBullHidden = false
+kstBearRegular = false
+kstBearHidden = false
+
+if kstPivotLowFound
+    lowOscValue = normalizedShortKST[kstPivotRight]
+    lowPriceValue = low[kstPivotRight]
+    lowBarIndex = bar_index - kstPivotRight
+
+    if kstUseDivergence and not na(previousLowOsc) and (lowBarIndex - previousLowBar) <= kstMaxPivotDistance
+        kstBullRegular := kstUseRegularDiv and lowOscValue > previousLowOsc and lowPriceValue < previousLowPrice
+        kstBullHidden := kstUseHiddenDiv and lowOscValue < previousLowOsc and lowPriceValue > previousLowPrice
+
+    previousLowOsc := lowOscValue
+    previousLowPrice := lowPriceValue
+    previousLowBar := lowBarIndex
+
+if kstPivotHighFound
+    highOscValue = normalizedShortKST[kstPivotRight]
+    highPriceValue = high[kstPivotRight]
+    highBarIndex = bar_index - kstPivotRight
+
+    if kstUseDivergence and not na(previousHighOsc) and (highBarIndex - previousHighBar) <= kstMaxPivotDistance
+        kstBearRegular := kstUseRegularDiv and highOscValue < previousHighOsc and highPriceValue > previousHighPrice
+        kstBearHidden := kstUseHiddenDiv and highOscValue > previousHighOsc and highPriceValue < previousHighPrice
+
+    previousHighOsc := highOscValue
+    previousHighPrice := highPriceValue
+    previousHighBar := highBarIndex
+
+
+// ============================================================================
+// 15. MC KST BULLISH / BEARISH DASHBOARD BIAS
+// ============================================================================
+//
+// DELPHI 5 uses the KST dashboard BIAS as confirmation.
+// It does NOT require a fresh KST crossover triangle on the ATRibbon signal bar.
+//
+
+voteShortKST = kstShortBull ? 1.0 : -1.0
+voteLongKST = kstLongUp ? 1.0 : kstLongDown ? -1.0 : 0.0
+votePriceLocation = kstPriceUp ? 1.0 : -1.0
+voteDivergence = (kstBullRegular or kstBullHidden) ? 1.0 : (kstBearRegular or kstBearHidden) ? -1.0 : 0.0
+
+totalKSTWeight = math.max(1.0, weightShortKST + weightLongKST + weightPriceLocation + weightDivergence)
+kstRawBiasScore = (voteShortKST * weightShortKST + voteLongKST * weightLongKST + votePriceLocation * weightPriceLocation + voteDivergence * weightDivergence) / totalKSTWeight * 100.0
+
+kstDirection = kstRawBiasScore >= 0 ? 1 : -1
+kstBullish = kstDirection == 1
+kstBearish = kstDirection == -1
+
+
+// ============================================================================
+// 16. RISK / R-MULTIPLE
+// ============================================================================
+
+groupRisk = "11 · DELPHI 5 Risk / R"
+
+tradeAtrLength = input.int(14, "Trade ATR Length", minval = 1, group = groupRisk)
+stopAtrMultiple = input.float(1.0, "1R Stop = ATR ×", minval = 0.1, step = 0.1, group = groupRisk)
+profitR = input.float(2.0, "Profit Target (R)", minval = 0.1, step = 0.25, group = groupRisk)
+
+tradeAtr = ta.atr(tradeAtrLength)
+
+
+// ============================================================================
+// 17. DELPHI 5 ENTRY CONDITIONS
+// ============================================================================
+
+confirmedBar = barstate.isconfirmed
+
+delphi5LongSetup = atrRibbonLongArrow and kstBullish and kstReady and canEnterSession and confirmedBar
+delphi5ShortSetup = atrRibbonShortArrow and kstBearish and kstReady and canEnterSession and confirmedBar
+
+canEnterLong = delphi5LongSetup and strategy.position_size <= 0
+canEnterShort = delphi5ShortSetup and strategy.position_size >= 0
+
+
+// ============================================================================
+// 18. ACTIVE TRADE LEVELS
+// ============================================================================
+
+var float activeStop = na
+var float activeTarget = na
+var float activeOneR = na
+var int activeDirection = 0
+
+if canEnterLong
+    currentRisk = tradeAtr * stopAtrMultiple
+
+    activeOneR := currentRisk
+    activeStop := close - currentRisk
+    activeTarget := close + currentRisk * profitR
+    activeDirection := 1
+
+    strategy.cancel("Short R Exit")
+
+    strategy.entry("Long", strategy.long, comment = "DELPHI 5 LONG")
+
+    strategy.exit(
+        "Long R Exit",
+        from_entry = "Long",
+        stop = activeStop,
+        limit = activeTarget,
+        comment_loss = "DELPHI 5 LONG STOP",
+        comment_profit = "DELPHI 5 LONG " + str.tostring(profitR) + "R"
+    )
+
+    alert("DELPHI 5 LONG | " + syminfo.ticker + " | ATRibbon LONG + MC KST BULLISH", alert.freq_once_per_bar_close)
+
+if canEnterShort
+    currentRisk = tradeAtr * stopAtrMultiple
+
+    activeOneR := currentRisk
+    activeStop := close + currentRisk
+    activeTarget := close - currentRisk * profitR
+    activeDirection := -1
+
+    strategy.cancel("Long R Exit")
+
+    strategy.entry("Short", strategy.short, comment = "DELPHI 5 SHORT")
+
+    strategy.exit(
+        "Short R Exit",
+        from_entry = "Short",
+        stop = activeStop,
+        limit = activeTarget,
+        comment_loss = "DELPHI 5 SHORT STOP",
+        comment_profit = "DELPHI 5 SHORT " + str.tostring(profitR) + "R"
+    )
+
+    alert("DELPHI 5 SHORT | " + syminfo.ticker + " | ATRibbon SHORT + MC KST BEARISH", alert.freq_once_per_bar_close)
+
+if strategy.position_size > 0 and activeDirection == 1 and not na(activeStop) and not na(activeTarget)
+    strategy.exit(
+        "Long R Exit",
+        from_entry = "Long",
+        stop = activeStop,
+        limit = activeTarget,
+        comment_loss = "DELPHI 5 LONG STOP",
+        comment_profit = "DELPHI 5 LONG " + str.tostring(profitR) + "R"
+    )
+
+if strategy.position_size < 0 and activeDirection == -1 and not na(activeStop) and not na(activeTarget)
+    strategy.exit(
+        "Short R Exit",
+        from_entry = "Short",
+        stop = activeStop,
+        limit = activeTarget,
+        comment_loss = "DELPHI 5 SHORT STOP",
+        comment_profit = "DELPHI 5 SHORT " + str.tostring(profitR) + "R"
+    )
+
+
+// ============================================================================
+// 19. MANDATORY END-OF-DAY FLATTEN
+// ============================================================================
+
+mustFlatten = (endOfDayBar or pastSessionCutoff) and strategy.position_size != 0
+
+if mustFlatten
+    strategy.cancel_all()
+    strategy.close_all(comment = "DELPHI 5 EOD EXIT")
+
+    activeStop := na
+    activeTarget := na
+    activeOneR := na
+    activeDirection := 0
+
+tradeJustClosed = strategy.position_size == 0 and strategy.position_size[1] != 0
+
+if tradeJustClosed
+    activeStop := na
+    activeTarget := na
+    activeOneR := na
+    activeDirection := 0
+
+
+// ============================================================================
+// 20. ATRIBBON VISUALS
+// ============================================================================
+
+ribbonVisualColor = ribbonRegime == 1 ? bullColor : ribbonRegime == -1 ? bearColor : neutralColor
+
+pFast = plot(showRibbon ? emaFast : na, "Adaptive EMA Fast", color = color.new(ribbonVisualColor, 0), linewidth = 2)
+pMid2 = plot(showRibbon ? emaMid2 : na, "Adaptive EMA Mid", color = color.new(ribbonVisualColor, 30), linewidth = 1)
+pAnchor = plot(showRibbon ? emaAnchor : na, "Adaptive EMA Anchor", color = color.new(ribbonVisualColor, 0), linewidth = 2)
+
+fill(pFast, pMid2, color.new(ribbonVisualColor, 87), title = "Fast Ribbon Fill")
+fill(pMid2, pAnchor, color.new(ribbonVisualColor, 92), title = "Slow Ribbon Fill")
+
+plot(showRail ? ribbonTrendStop : na, "ATRibbon Trend Rail", color = ribbonVisualColor, linewidth = 2, style = plot.style_linebr)
+
+plotshape(
+    showSourceArrows and atrRibbonLongArrow,
+    title = "ATRibbon LONG Arrow",
+    style = shape.triangleup,
+    location = location.belowbar,
+    color = color.new(bullColor, 40),
+    size = size.tiny
+)
+
+plotshape(
+    showSourceArrows and atrRibbonShortArrow,
+    title = "ATRibbon SHORT Arrow",
+    style = shape.triangledown,
+    location = location.abovebar,
+    color = color.new(bearColor, 40),
+    size = size.tiny
+)
+
+plotshape(
+    showEntryLabels and canEnterLong,
+    title = "DELPHI 5 LONG",
+    style = shape.labelup,
+    location = location.belowbar,
+    color = bullColor,
+    text = "D5 L",
+    textcolor = color.white,
+    size = size.small
+)
+
+plotshape(
+    showEntryLabels and canEnterShort,
+    title = "DELPHI 5 SHORT",
+    style = shape.labeldown,
+    location = location.abovebar,
+    color = bearColor,
+    text = "D5 S",
+    textcolor = color.white,
+    size = size.small
+)
+
+plot(
+    showRiskLines and strategy.position_size != 0 ? activeStop : na,
+    "Active 1R Stop",
+    color = color.new(bearColor, 10),
+    linewidth = 1,
+    style = plot.style_linebr
+)
+
+plot(
+    showRiskLines and strategy.position_size != 0 ? activeTarget : na,
+    "Active R Target",
+    color = color.new(bullColor, 10),
+    linewidth = 1,
+    style = plot.style_linebr
+)
+
+
+// ============================================================================
+// 21. LC-STYLE STATS
+// ============================================================================
+
+closedTrades = strategy.closedtrades
+winningTrades = strategy.wintrades
+losingTrades = strategy.losstrades
+
+winRate = closedTrades > 0 ? winningTrades / closedTrades * 100.0 : 0.0
+
+grossLossAbs = math.abs(strategy.grossloss)
+profitFactor = grossLossAbs > 0 ? strategy.grossprofit / grossLossAbs : strategy.grossprofit > 0 ? strategy.grossprofit : 0.0
+
+positionText = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
+positionColor = strategy.position_size > 0 ? bullColor : strategy.position_size < 0 ? bearColor : neutralColor
+
+atrSignalText = atrRibbonLongArrow ? "LONG" : atrRibbonShortArrow ? "SHORT" : "—"
+atrSignalColor = atrRibbonLongArrow ? bullColor : atrRibbonShortArrow ? bearColor : neutralColor
+
+kstBiasText = not kstReady ? "WARMING" : kstBullish ? "BULLISH" : "BEARISH"
+kstBiasColor = not kstReady ? neutralColor : kstBullish ? bullColor : bearColor
+
+sessionText = canEnterSession ? "ACTIVE" : endOfDayBar ? "FLATTEN" : "CLOSED"
+sessionColor = canEnterSession ? bullColor : endOfDayBar ? bearColor : neutralColor
+
+var table statsTable = table.new(position.top_right, 2, 9, frame_color = color.new(neutralColor, 55), frame_width = 1, border_width = 0)
+
+if barstate.islast
+    table.clear(statsTable, 0, 0, 1, 8)
+
+    if showStats
+        table.cell(statsTable, 0, 0, "DELPHI 5", text_color = color.white, bgcolor = bullColor, text_size = size.normal)
+        table.cell(statsTable, 1, 0, "ATR-KST", text_color = color.white, bgcolor = bullColor, text_size = size.normal)
+
+        table.cell(statsTable, 0, 1, "Position", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 1, positionText, text_color = positionColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 2, "ATR Signal", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 2, atrSignalText, text_color = atrSignalColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 3, "MC KST", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 3, kstBiasText, text_color = kstBiasColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 4, "R Target", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 4, str.tostring(profitR, "#.##") + "R", text_color = chart.fg_color, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 5, "Trades", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 5, str.tostring(closedTrades), text_color = chart.fg_color, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 6, "Winrate", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 6, str.tostring(winRate, "#.0") + "%", text_color = chart.fg_color, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 7, "Profit Factor", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 7, str.tostring(profitFactor, "#.##"), text_color = chart.fg_color, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+        table.cell(statsTable, 0, 8, "Session", text_color = neutralColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+        table.cell(statsTable, 1, 8, sessionText, text_color = sessionColor, bgcolor = color.new(chart.bg_color, 10), text_size = size.normal)
+
+
+// ============================================================================
+// 22. DATA WINDOW
+// ============================================================================
+
+plot(kstRawBiasScore, "MC KST Bias Score", color = color.new(neutralColor, 100), display = display.data_window)
+plot(ribbonAdx, "ATRibbon ADX", color = color.new(neutralColor, 100), display = display.data_window)
+
+// ============================================================================
+// END
+// ============================================================================
