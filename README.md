@@ -28,7 +28,7 @@ Euclidean: sqrt(sum(difference²))
 LC:        sum(log(1 + abs(difference)))
 ```
 
-The logarithm compresses large differences, changing which historical states look similar. The motivation is to limit the influence of unusual readings during noisy markets or major events such as FOMC Days. KAIROS uses indicator values rather than news or event schedules. This metric choice does not establish superior trading performance. [3]
+The logarithm compresses large differences, changing which historical states look similar. The motivation is to limit the influence of unusual readings during noisy markets or major events such as FOMC Days. KAIROS uses indicator values rather than news or event schedules. This metric choice does not establish superior trading performance. Moreover, Lorentzian distance was also shown to outperform dozens of other highly regarded distance metrics, including Manhattan distance, Bhattacharyya similarity, and Cosine similarity.[3]
 
 ### Approximate neighbors in KAIROS
 
