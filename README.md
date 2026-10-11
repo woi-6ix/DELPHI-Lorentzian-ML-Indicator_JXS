@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/Platform-TradingView-black)
 ![License](https://img.shields.io/badge/License-MPL--2.0-purple)
 
-**KAIROS V4 is a TradingView strategy** combining Nadaraya–Watson kernel swing triggers with optional Lorentzian Classification (LC), ML vote confirmation, and EMA/SMA entry filters. It includes slope/Volatility Push (VP) markers, fixed ATR exits, editable shares, cash loss control, session, alerts, and navy/gold theme.
+**KAIROS V4 is a TradingView strategy** combining Nadaraya–Watson kernel swing triggers with optional Lorentzian Classification (LC), ML vote confirmation, and EMA/SMA entry filters. It includes slope/Volatility Push (VP) markers, fixed ATR exits, editable shares, cash loss control, session, alerts, and a navy/gold theme.
 
 **Inspiration:** KAIROS was inspired by **jdehorty's open-source Lorentzian Classification and kernel regression code**. I have adapted that foundation into this strategy's entry confirmations, position protection, session controls, and presentation. Original work and supporting sources are linked under References.
 
@@ -13,13 +13,13 @@
 
 ## Overview: how the machine learning works
 
-**Machine learning (ML)** here means classifying today's market state using stored historical examples. Each bar becomes a **feature vector**: a list of normalized indicator readings describing momentum, price deviation and trend strength. A **label** is the directional value attached to a historical example.
+**Machine learning (ML)** in KAIROS classifies today's market state using stored historical examples. Each bar becomes a **feature vector**: a list of normalized indicator readings describing momentum, price deviation, and trend strength. A **label** is the directional value attached to a historical example.
 
-**Nearest-neighbor classification** compares a new feature vector with historical vectors, finds similar examples and combines their labels. In conventional **k-nearest neighbors (kNN)**, `k` is the number of closest examples used for voting. “Near” refers to similarity in indicator readings, not simply nearby dates. Feature normalization helps prevent an indicator's larger numerical scale from dominating the comparison. [1]
+**Nearest-neighbor classification** compares a new feature vector with historical vectors, finds similar examples, and combines their labels. In conventional **k-nearest neighbors (kNN)**, `k` is the number of closest examples used for voting. “Near” refers to similarity in indicator readings, not simply nearby dates. Feature normalization helps prevent an indicator's larger numerical scale from dominating the comparison. [1]
 
 ### Euclidean distance versus LC distance
 
-**Euclidean distance** measures straight-line separation between feature vectors. It squares each feature difference, adds those squares and takes the square root. Large differences can dominate the resulting distance. [2]
+**Euclidean distance** measures straight-line separation between feature vectors. It squares each feature difference, adds those squares, and takes the square root. Large differences can dominate the resulting distance. [2]
 
 KAIROS's **Lorentzian Classification (LC)** uses a logarithmic distance instead. For each enabled normalized feature, let `difference = current value − historical value`:
 
