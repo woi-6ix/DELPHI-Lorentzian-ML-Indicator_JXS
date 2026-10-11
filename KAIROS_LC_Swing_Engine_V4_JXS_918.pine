@@ -10,7 +10,7 @@
 //@strategy_alert_message {{strategy.order.alert_message}}
 strategy(
      title="KAIROS LC Swing Engine V4 {JXS_918}",
-     shorttitle="KAIROS LC V4",
+     shorttitle="KAIROS V4",
      overlay=true,
      pyramiding=0,
      process_orders_on_close=true,
@@ -547,7 +547,7 @@ float stopAtrMultiple = input.float(
 float rewardRiskMultiple = input.float(
      2.0,
      "Profit Target (R)",
-     minval=0.25,
+     minval=0.10,
      step=0.25,
      group=GROUP_RISK
 )
@@ -1052,12 +1052,12 @@ string statsPosition = input.string(
      group=GROUP_STATS
 )
 string statsFont = input.string(
-     "Normal",
+     "Small",
      "Font Size",
      options=["Small", "Normal", "Large"],
      group=GROUP_STATS
 )
-string statsFontFamilyInput = input.string("Default", "Table Font Family", options=["Default", "Monospace"], group=GROUP_STATS)
+string statsFontFamilyInput = input.string("Monospace", "Table Font Family", options=["Default", "Monospace"], group=GROUP_STATS)
 string statsFontFamily = statsFontFamilyInput == "Monospace" ? font.family_monospace : font.family_default
 statsTablePosition = switch statsPosition
     "Bottom Right" => position.bottom_right
@@ -1191,8 +1191,8 @@ if barstate.islastconfirmedhistory or barstate.islast
 string GROUP_FOOTER = "Bottom Watermark"
 bool showBottomWatermark = input.bool(true, "Show Bottom Watermark", group=GROUP_FOOTER)
 string bottomWatermarkText = input.string("KAIROS · LC SWING ENGINE V4 · JXS_918", "Bottom Text", group=GROUP_FOOTER)
-int bottomWatermarkSize = input.int(14, "Bottom Font Size", minval=8, maxval=36, group=GROUP_FOOTER)
-string bottomWatermarkFamilyInput = input.string("Default", "Bottom Font Family", options=["Default", "Monospace"], group=GROUP_FOOTER)
+int bottomWatermarkSize = input.int(10, "Bottom Font Size", minval=8, maxval=36, group=GROUP_FOOTER)
+string bottomWatermarkFamilyInput = input.string("Default", "Bottom Font Family", options=["Monospace", "Default"], group=GROUP_FOOTER)
 color bottomWatermarkColor = input.color(color.new(#FFD700, 45), "Bottom Text Color", group=GROUP_FOOTER)
 string bottomWatermarkFamily = bottomWatermarkFamilyInput == "Monospace" ? font.family_monospace : font.family_default
 var table bottomWatermark = table.new(position.bottom_center, 1, 1)
@@ -1278,4 +1278,3 @@ if barstate.islastconfirmedhistory or barstate.islast
         f_kairosStatsRow(cashLossTable, 6, "Loss at Stop", na(protectedLoss) ? "—" : f_kairosMoney(protectedLoss), cRed, statsTextSize)
     else
         table.clear(cashLossTable, 0, 0, 1, 6)
-
