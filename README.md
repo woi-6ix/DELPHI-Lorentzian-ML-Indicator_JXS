@@ -5,11 +5,11 @@
 ![Platform](https://img.shields.io/badge/Platform-TradingView-black)
 ![License](https://img.shields.io/badge/License-MPL--2.0-purple)
 
-**KAIROS V4 is a TradingView strategy** combining Nadaraya–Watson kernel swing triggers with optional Lorentzian Classification (LC), ML vote confirmation and EMA/SMA entry filters. It retains V3's slope/Volatility Push (VP), fixed ATR exits, editable shares, cash loss control, session, alerts and navy/gold theme.
+**KAIROS V4 is a TradingView strategy** combining Nadaraya–Watson kernel swing triggers with optional Lorentzian Classification (LC), ML vote confirmation, and EMA/SMA entry filters. It includes slope/Volatility Push (VP) markers, fixed ATR exits, editable shares, cash loss control, session, alerts, and navy/gold theme.
 
-**Inspiration:** KAIROS was inspired by **jdehorty's open-source Lorentzian Classification and kernel regression code**. I have adapted that foundation into this strategy's entry confirmations, position protection, session controls and presentation. Original work and supporting sources are linked under References.
+**Inspiration:** KAIROS was inspired by **jdehorty's open-source Lorentzian Classification and kernel regression code**. I have adapted that foundation into this strategy's entry confirmations, position protection, session controls, and presentation. Original work and supporting sources are linked under References.
 
-**Why Kairos?** Kairos personifies the opportune moment in Greek mythology. The name reflects waiting until the kernel's direction, enabled confirmations and trading hours align.
+**Why Kairos?** Kairos personifies the opportune moment in Greek mythology. The name reflects waiting until the kernel's direction, enabled confirmations, and trading hours align.
 
 ## Overview: how the machine learning works
 
@@ -36,7 +36,9 @@ KAIROS uses **approximate nearest neighbors (ANN)**: a chronological candidate s
 
 ### Nadaraya–Watson kernel regression
 
-The kernel estimates price through a weighted average: `sum(weight × price) / sum(weight)`. Rational Quadratic weights smooth price across past observations; a rising estimate is bullish and a falling estimate bearish. Optional Enhanced Smoothing compares Gaussian and Rational Quadratic estimates to determine direction. **The kernel flip triggers a trade; LC confirms it.** This price estimator and the feature-based classifier perform separate jobs. [4]
+In quantitative trading, the Nadaraya–Watson (NW) estimator is used as an ultra-smooth, adaptive trend indicator that filters out market noise without the harsh mathematical lag seen in traditional moving averages. Instead of evaluating price over a fixed window (like a Simple Moving Average), it applies an algorithmic time-weighting (usually a Gaussian or Rational Quadratic kernel) where historical price bars fade exponentially based on their distance from the target estimation point. 
+
+In KAIROS, the kernel estimates price through a weighted average: `sum(weight × price) / sum(weight)`. Rational Quadratic weights smooth price across past observations; a rising estimate is bullish and a falling estimate bearish. Optional Enhanced Smoothing compares Gaussian and Rational Quadratic estimates to determine direction. **The kernel flip triggers a trade; LC confirms it.** This price estimator and the feature-based classifier perform separate jobs. [4]
 
 ## ML features and prediction
 
