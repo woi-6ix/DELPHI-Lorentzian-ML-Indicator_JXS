@@ -75,7 +75,7 @@ The file now defaults to options. In an existing QC project, also set **`executi
 - The cash-cap toggle, if enabled, monitors option liquidation P&L using available fresh bid closes. It is OFF by default.
 - Runtime statistics report execution mode, skipped option signals, and rejected orders.
 
-QuantConnect supports options backtesting; the older DELPHI file's stock-only behavior is an implementation choice, not a prohibition on free-tier options. Free cloud historical data availability is documented by QuantConnect. Cloud runtime, engine version, account limits and available data still determine whether a particular run completes.
+QuantConnect supports options backtesting; stock-only behavior in a backtest is an implementation choice, not a prohibition on free-tier options. Free cloud historical data availability is documented by QuantConnect. Cloud runtime, engine version, account limits and available data still determine whether a particular run completes.
 
 ## Validation and execution limits
 

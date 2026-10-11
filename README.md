@@ -173,7 +173,7 @@ Its preset differs from Pine: smoothing ON/lag 6, slope OFF, VP window 10, oppos
 
 ## Author and license
 
-**Author:** JXS_918 · [@woi-6ix](https://github.com/woi-6ix). Adapted code is covered by [MPL 2.0](LICENSE); see [third-party notices](THIRD_PARTY_NOTICES.md). [V3 source](KAIROS_LC_Swing_Engine_V3_JXS_918.pine) and earlier KAIROS/DELPHI versions remain available.
+**Author:** JXS_918 · [@woi-6ix](https://github.com/woi-6ix). Adapted code is covered by [MPL 2.0](LICENSE); see [third-party notices](THIRD_PARTY_NOTICES.md). [V3 source](KAIROS_LC_Swing_Engine_V3_JXS_918.pine) and earlier KAIROS versions remain available.
 
 ## References
 
