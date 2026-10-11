@@ -154,7 +154,9 @@ Use **Order fills** alerts for V4 order messages. Including **alert() function c
 ## Note on "repainting"
 
 **For KAIROS V4:** Once a bar has closed, this indicator will NOT repaint. This is true for both the ML predictions and the Kernel estimate.
-The LC update path requires confirmed chart bars, excludes the current sample, and has once-per-bar/fill-callback guards. The kernel uses current/past price inputs. However, KAIROS is a strategy with `process_orders_on_close=true` and `calc_on_order_fills=true`. Repainting may occur with LC disabled, although it isn’t automatic.
+The LC update path requires confirmed chart bars, excludes the current sample, and has once-per-bar/fill-callback guards. The kernel uses current/past price inputs. However, KAIROS is a strategy with `process_orders_on_close=true` and `calc_on_order_fills=true`.
+
+Repainting may occur with LC disabled, although it isn’t automatic.
 Disabling LC removes its protection against entering during order-fill recalculations.
 
 ## Use and validation
