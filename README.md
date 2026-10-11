@@ -1,4 +1,4 @@
-# KAIROS LC Swing Engine V4
+# KAIROS LC Swing Engine
 
 ![Pine Script](https://img.shields.io/badge/Pine%20Script-v6-blue)
 ![Python](https://img.shields.io/badge/Python-QuantConnect-3776AB)
