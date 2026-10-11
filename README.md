@@ -9,7 +9,7 @@
 
 **Inspiration:** KAIROS was inspired by **jdehorty's open-source Lorentzian Classification and kernel regression code**. KAIROS V4 has adapted this foundation into this strategy's entry confirmations, position protection, session controls, and presentation. Original work and supporting sources are linked under References.
 
-**Why Kairos?** Kairos personifies the opportune moment in Greek mythology. The name reflects waiting until the kernel's direction, enabled confirmations, and trading hours align.
+**Why KAIROS?** Kairos personifies the opportune moment in Greek mythology. The name reflects waiting until the kernel's direction, enabled confirmations, and trading hours align.
 
 ## Overview: how the machine learning works
 
