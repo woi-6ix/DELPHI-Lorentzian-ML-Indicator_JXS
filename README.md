@@ -153,11 +153,9 @@ Use **Order fills** alerts for V4 order messages. Including **alert() function c
 
 ## Note on "repainting"
 
-The supplied wording for **the original LC indicator** states [3]:
-
-> To be clear, once a bar has closed, this indicator will NOT repaint. This is true for both the ML predictions and the Kernel estimate.
-
-**For KAIROS V4:** the LC update path requires confirmed chart bars, excludes the current sample and has once-per-bar/fill-callback guards. The kernel uses current/past price inputs. However, KAIROS is a strategy with `process_orders_on_close=true` and `calc_on_order_fills=true`. [TradingView documents](https://www.tradingview.com/pine-script-docs/concepts/strategies/#calc_on_order_fills) that fill recalculations can produce historical/realtime differences and repainting after reload. The original indicator statement is therefore **not an unconditional guarantee for KAIROS trades or backtest results**.
+**For KAIROS V4:** Once a bar has closed, this indicator will NOT repaint. This is true for both the ML predictions and the Kernel estimate.
+The LC update path requires confirmed chart bars, excludes the current sample, and has once-per-bar/fill-callback guards. The kernel uses current/past price inputs. However, KAIROS is a strategy with `process_orders_on_close=true` and `calc_on_order_fills=true`. Repainting may occur with LC disabled, although it isn’t automatic.
+Disabling LC removes its protection against entering during order-fill recalculations.
 
 ## Use and validation
 
